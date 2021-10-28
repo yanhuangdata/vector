@@ -1,16 +1,18 @@
-use super::{DatadogAgentConfig, LogMsg};
 use crate::{
     codecs::{self, BytesCodec, BytesParser},
     config::{log_schema, SourceConfig, SourceContext},
     event::{Event, EventStatus},
-    serde::{default_decoding, default_framing_message_based},
-    sources::datadog::agent::DatadogAgentSource,
+    sources::datadog::{
+        config::DatadogAgentConfig,
+        logs::{decode_log_body, LogMsg},
+    },
     test_util::{next_addr, spawn_collect_n, trace_init, wait_for_tcp},
     Pipeline,
 };
 use bytes::Bytes;
 use futures::Stream;
 use http::HeaderMap;
+use indoc::indoc;
 use pretty_assertions::assert_eq;
 use quickcheck::{Arbitrary, Gen, QuickCheck, TestResult};
 use std::net::SocketAddr;
@@ -38,11 +40,9 @@ fn test_decode_log_body() {
     fn inner(msgs: Vec<LogMsg>) -> TestResult {
         let body = Bytes::from(serde_json::to_string(&msgs).unwrap());
         let api_key = None;
-
         let decoder =
             codecs::Decoder::new(Box::new(BytesCodec::new()), Box::new(BytesParser::new()));
-        let source = DatadogAgentSource::new(true, decoder);
-        let events = source.decode_log_body(body, api_key).unwrap();
+        let events = decode_log_body(body, api_key, decoder).unwrap();
         assert_eq!(events.len(), msgs.len());
         for (msg, event) in msgs.into_iter().zip(events.into_iter()) {
             let log = event.as_log();
@@ -75,14 +75,19 @@ async fn source(
     let address = next_addr();
     let mut context = SourceContext::new_test(sender);
     context.acknowledgements = acknowledgements;
+
+    let config = toml::from_str::<DatadogAgentConfig>(&format!(
+        indoc!{ r#"
+            address = "{}"
+            compression = "none"
+            store_api_key = {}
+        "#},
+        address,
+        store_api_key
+    )).unwrap();
+
     tokio::spawn(async move {
-        DatadogAgentConfig {
-            address,
-            tls: None,
-            store_api_key,
-            framing: default_framing_message_based(),
-            decoding: default_decoding(),
-        }
+        config
         .build(context)
         .await
         .unwrap()

@@ -122,7 +122,7 @@ impl DatadogAgentSource {
 
         filters.ok_or("At least one of the supported data type shall be enabled".into())
     }
-
+}
 
 pub(crate) async fn handle_request(
     events: Result<Vec<Event>, ErrorMessage>,

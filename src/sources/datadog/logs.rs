@@ -52,7 +52,7 @@ pub(crate) fn build_warp_filter(
         .boxed()
 }
 
-fn decode_log_body(
+pub(crate) fn decode_log_body(
     body: Bytes,
     api_key: Option<Arc<str>>,
     decoder: codecs::Decoder,
