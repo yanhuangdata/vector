@@ -93,13 +93,6 @@ fn decode_dd_trace_payload(
     lang: Option<&String>,
 ) -> crate::Result<Vec<Event>> {
     let decoded_payload = dd_proto::TracePayload::decode(frame)?;
-
-    debug!(
-        message = "Deserialized a datadog traces payload - /api/beta/sketches",
-        hostname = ?decoded_payload.host_name,
-        env = ?decoded_payload.env,
-    );
-
     let env = decoded_payload.env;
     let hostname = decoded_payload.host_name;
     // Each traces is map to one event...
