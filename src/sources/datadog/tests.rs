@@ -77,22 +77,17 @@ async fn source(
     context.acknowledgements = acknowledgements;
 
     let config = toml::from_str::<DatadogAgentConfig>(&format!(
-        indoc!{ r#"
+        indoc! { r#"
             address = "{}"
             compression = "none"
             store_api_key = {}
         "#},
-        address,
-        store_api_key
-    )).unwrap();
+        address, store_api_key
+    ))
+    .unwrap();
 
     tokio::spawn(async move {
-        config
-        .build(context)
-        .await
-        .unwrap()
-        .await
-        .unwrap();
+        config.build(context).await.unwrap().await.unwrap();
     });
     wait_for_tcp(address).await;
     (recv, address)
