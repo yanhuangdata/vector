@@ -11,6 +11,8 @@ path = "src/bin/observer.rs"
 toml = "0.5"
 snafu = "0.6"
 http = "0.2"
+ndarray = "0.15"
+ndarray-stats = "0.5"
 
 [dependencies.reqwest]
 version = "0.11"

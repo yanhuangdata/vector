@@ -6387,6 +6387,8 @@ version = "0.1.0"
 dependencies = [
  "argh",
  "http",
+ "ndarray",
+ "ndarray-stats",
  "reqwest",
  "serde",
  "serde_json",

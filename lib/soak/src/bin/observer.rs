@@ -133,24 +133,23 @@ struct QueryResponse {
 }
 
 struct Worker {
-    url: Url,
     vector_id: String,
     experiment_name: String,
-    queries: Vec<String>,
+    queries: Vec<(String, Url)>,
     startup_delay: u64,
     capture_path: String,
 }
 
 impl Worker {
     fn new(config: Config) -> Self {
-        let queries = Vec::new();
+        let mut queries = Vec::new();
         for query in config.queries {
             let url = format!("{}/api/v1/query?query={}", config.prometheus, query);
-            queries.push(url);
+            let url = url.parse::<Url>().unwrap();
+            queries.push((query, url));
         }
 
         Self {
-            url: url.parse::<Url>().unwrap(),
             vector_id: config.vector_id,
             experiment_name: config.experiment_name,
             queries,
@@ -166,29 +165,31 @@ impl Worker {
 
         sleep(Duration::from_secs(self.startup_delay)).await;
         loop {
-            let request = client.get(self.url.clone()).build()?;
-            let body = client
-                .execute(request)
-                .await?
-                .json::<QueryResponse>()
-                .await?;
+            for (query, url) in &self.queries {
+                let request = client.get(url.clone()).build()?;
+                let body = client
+                    .execute(request)
+                    .await?
+                    .json::<QueryResponse>()
+                    .await?;
 
-            if !body.data.result.is_empty() {
-                let time = body.data.result[0].value.time;
-                let value = body.data.result[0].value.value.parse::<f64>()?;
-                let output = serde_json::to_string(&Output {
-                    experiment: &self.experiment_name,
-                    vector_id: &self.vector_id,
-                    time,
-                    queries: vec![Query {
-                        query: &self.query,
-                        value,
-                    }],
-                })?;
-                file.write_all(output.as_bytes()).await?;
-                file.write_all(b"\n").await?;
-            } else {
-                // TODO log error to stderr or what not
+                if !body.data.result.is_empty() {
+                    let time = body.data.result[0].value.time;
+                    let value = body.data.result[0].value.value.parse::<f64>()?;
+                    let output = serde_json::to_string(&Output {
+                        experiment: &self.experiment_name,
+                        vector_id: &self.vector_id,
+                        time,
+                        queries: vec![Query {
+                            query: &query,
+                            value,
+                        }],
+                    })?;
+                    file.write_all(output.as_bytes()).await?;
+                    file.write_all(b"\n").await?;
+                } else {
+                    // TODO log error to stderr or what not
+                }
             }
             sleep(Duration::from_secs(1)).await;
         }
