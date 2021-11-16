@@ -357,6 +357,7 @@ _values: {
 	_args: {
 		arrays:   true
 		required: bool
+		description: !=""
 	}
 	let Args = _args
 
@@ -365,7 +366,65 @@ _values: {
 	// For example, the `sinks.http.headers.*` option allows for arbitrary
 	// key/value pairs.
 	{"array": #TypeArray & {_args: required: Args.required}} |
+	{"condition": #TypeCondition & {_args: required: Args.required}} |
+	// Standard types
 	#TypePrimitive
+}
+
+#TypeCondition: {
+	#Syntax: {
+		name: "vrl" | "datadog_search"
+		description: !=""
+
+		if name == "vrl" {
+			description: "Vector Remap Language"
+		}
+
+		if name == "datadog_search" {
+			description: "Datadog Search syntax"
+		}
+	}
+
+	supported_syntaxes: [#Syntax, ...#Syntax]
+}
+
+_vrl_condition: {
+	description: "A [Vector Remap Language](\(urls.vrl_reference)) (VRL) Boolean expression."
+
+	type: condition: {
+		supported_syntaxes: [
+			{
+				name: "vrl"
+			}
+		]
+	}
+}
+
+_datadog_search_condition: {
+	description: "A [Datadog Search](\(urls.datadog_search_syntax)) query."
+
+	type: condition: {
+		supported_syntaxes: [
+			{
+				name: "datadog_search"
+			}
+		]
+	}
+}
+
+_multi_condition: {
+	description: "insert here later"
+
+	type: condition: {
+		supported_syntaxes: [
+			{
+				name: "datadog_search"
+			},
+			{
+				name: "vrl"
+			}
+		]
+	}
 }
 
 #TypePrimitive: {
@@ -470,7 +529,7 @@ _values: {
 		]
 	}
 
-	syntax: *"literal" | "file_system_path" | "field_path" | "template" | "regex" | "remap_boolean_expression" | "remap_program" | "strftime"
+	syntax: *"literal" | "file_system_path" | "field_path" | "template" | "regex" | "vrl_boolean_expression" | "remap_program" | "strftime"
 }
 
 #TypeTimestamp: {

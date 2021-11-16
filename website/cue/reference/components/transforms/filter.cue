@@ -25,18 +25,8 @@ components: transforms: filter: {
 	}
 
 	configuration: {
-		condition: {
-			description: """
-				The condition to be matched against every input event. Only messages that pass the condition will
-				be forwarded.
-				"""
+		condition: _vrl_condition & {
 			required: true
-			type: string: {
-				examples: [
-					#".status_code != 200 && !includes(["info", "debug"], .severity)"#,
-				]
-				syntax: "remap_boolean_expression"
-			}
 		}
 	}
 
