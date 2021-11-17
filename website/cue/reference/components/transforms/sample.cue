@@ -40,19 +40,12 @@ components: transforms: sample: {
 				examples: ["message"]
 			}
 		}
-		exclude: {
-			common: true
+		exclude: _vrl_condition & {
 			description: """
-				The set of logical conditions to exclude events from sampling.
+				The condition used to exclude any given event from sampling.
 				"""
 			required: false
-			type: string: {
-				default: null
-				examples: [
-					#".status_code != 200 && !includes(["info", "debug"], .severity)"#,
-				]
-				syntax: "vrl_boolean_expression"
-			}
+			common:   true
 		}
 		rate: {
 			description: """

@@ -112,6 +112,53 @@
         {{ end }}
       </div>
       {{ end }}
+      {{ else if eq $k "condition" }}
+      <div class="my-2 prose dark:prose-dark max-w-none">
+        {{ $v.explainer | markdownify }}
+      </div>
+
+      {{ if gt (len .supported_syntaxes) 1 }} {{/* Multiple supported syntaxes table */}}
+      <div class="mt-2">
+        {{ partial "heading.html" (dict "text" "Supported syntaxes" "level" 4 "toc_hide" true "icon" false) }}
+
+        <table class="table-auto">
+          <thead>
+            <tr>
+              <th>
+                Syntax
+              </th>
+              <th>
+                Description
+              </th>
+              <th>
+                Example
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {{ range $v.supported_syntaxes }}
+            <tr>
+              <td>
+                <code>
+                  {{ .name }}
+                </code>
+              </td>
+              <td>
+                {{ .description | markdownify }}
+              </td>
+              <td>
+                <code>
+                  {{ .example }}
+                </code>
+              </td>
+            </tr>
+            {{ end }}
+          </tbody>
+        </table>
+      </div>
+      {{ else }}
+      Example: <code>{{ (index .supported_syntaxes 0).example }}</code>
+      {{ end }}
       {{ else }} {{/* Non-arrays/objects */}}
       {{ if eq $v.syntax "template" }}
       <div class="mt-4 text-sm">
@@ -379,7 +426,7 @@
         </span>
       </span>
 
-      <div class="mt-4 prose prose-sm dark:prose-dark max-w-none">
+      <div class="mt-4 prose dark:prose-dark max-w-none">
         {{ $v.description | markdownify }}
       </div>
 

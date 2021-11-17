@@ -36,18 +36,12 @@ components: transforms: route: {
 			required: true
 			type: object: {
 				options: {
-					"*": {
+					"*": _vrl_condition & {
 						description: """
-							The condition to be matched against every input event. Only messages that pass the
-							condition will be included in this route.
+							The condition to be matched against every input event. Only messages that pass the condition
+							are included in this route.
 							"""
 						required: true
-						type: string: {
-							examples: [
-								#".status_code != 200 && !includes(["info", "debug"], .severity)"#,
-							]
-							syntax: "vrl_boolean_expression"
-						}
 					}
 				}
 			}

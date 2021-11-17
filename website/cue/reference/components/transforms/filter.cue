@@ -25,7 +25,11 @@ components: transforms: filter: {
 	}
 
 	configuration: {
-		condition: _vrl_condition & {
+		condition: _multi_condition & {
+			description: """
+				The condition to be matched against every input event. Only messages that pass the condition are
+				forwarded.
+				"""
 			required: true
 		}
 	}
@@ -46,7 +50,7 @@ components: transforms: filter: {
 		{
 			title: "Drop debug logs"
 			configuration: {
-				condition: #".level == "debug""#
+				condition: #".level != "debug""#
 			}
 			input: [
 				{

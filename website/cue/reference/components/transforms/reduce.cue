@@ -26,19 +26,13 @@ components: transforms: reduce: {
 	}
 
 	configuration: {
-		ends_when: {
-			common: false
+		ends_when: _vrl_condition & {
 			description: """
 				A condition used to distinguish the final event of a transaction. If this condition resolves to `true`
 				for an event, the current transaction is immediately flushed with this event.
 				"""
 			required: false
-			type: string: {
-				default: null
-				examples: [
-					#".status_code != 200 && !includes(["info", "debug"], .severity)"#,
-				]
-			}
+			common:   false
 		}
 		expire_after_ms: {
 			common:      false
@@ -118,19 +112,13 @@ components: transforms: reduce: {
 				}
 			}
 		}
-		starts_when: {
-			common: false
+		starts_when: _vrl_condition & {
 			description: """
 				A condition used to distinguish the first event of a transaction. If this condition resolves to `true`
 				for an event, the previous transaction is flushed (without this event) and a new transaction is started.
 				"""
 			required: false
-			type: string: {
-				default: null
-				examples: [
-					#".status_code != 200 && !includes(["info", "debug"], .severity)"#,
-				]
-			}
+			common:   false
 		}
 	}
 

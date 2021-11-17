@@ -355,8 +355,8 @@ _values: {
 
 #Type: {
 	_args: {
-		arrays:   true
-		required: bool
+		arrays:      true
+		required:    bool
 		description: !=""
 	}
 	let Args = _args
@@ -369,55 +369,6 @@ _values: {
 	{"condition": #TypeCondition & {_args: required: Args.required}} |
 	// Standard types
 	#TypePrimitive
-}
-
-#TypeCondition: {
-	#Syntax: {
-		name: "vrl" | "datadog_search"
-		description: !=""
-
-		if name == "vrl" {
-			description: "Vector Remap Language"
-		}
-
-		if name == "datadog_search" {
-			description: "Datadog Search syntax"
-		}
-	}
-
-	supported_syntaxes: [#Syntax, ...#Syntax]
-}
-
-_vrl_syntax: {
-	name: "vrl"
-}
-
-_datadog_search_syntax: {
-	name: "datadog_search"
-}
-
-_vrl_condition: {
-	description: "A [Vector Remap Language](\(urls.vrl_reference)) (VRL) Boolean expression."
-
-	type: condition: {
-		supported_syntaxes: [_vrl_syntax]
-	}
-}
-
-_datadog_search_condition: {
-	description: "A [Datadog Search](\(urls.datadog_search_syntax)) query."
-
-	type: condition: {
-		supported_syntaxes: [_datadog_search_syntax]
-	}
-}
-
-_multi_condition: {
-	description: "insert here later"
-
-	type: condition: {
-		supported_syntaxes: [_vrl_syntax, _datadog_search_syntax]
-	}
 }
 
 #TypePrimitive: {
@@ -466,6 +417,18 @@ _multi_condition: {
 		// `default` sets the default value.
 		default: bool | null
 	}
+}
+
+#TypeCondition: {
+	#Syntax: {
+		name:        "vrl" | "datadog_search"
+		description: !=""
+		example:     !=""
+	}
+
+	explainer: !=""
+
+	supported_syntaxes: [#Syntax, ...#Syntax]
 }
 
 #TypeFloat: {
@@ -571,6 +534,44 @@ releases:       _
 remap:          _
 
 // Reusable info
+_vrl_syntax: {
+	name:        "vrl"
+	description: "A [Vector Remap Language](\(urls.vrl_reference)) Boolean expression."
+	example:     #".status_code == 200"#
+}
+
+_datadog_search_syntax: {
+	name:        "datadog_search"
+	description: "A query in [Datadog Search](\(urls.datadog_search_syntax)) syntax."
+	example:     #"*stack"#
+}
+
+_vrl_condition: {
+	type: condition: {
+		explainer: """
+			This condition can be specified as a [Vector Remap Language](\(urls.vrl_reference)) (VRL) Boolean
+			expression.
+			"""
+		supported_syntaxes: [_vrl_syntax]
+	}
+}
+
+_datadog_search_condition: {
+	type: condition: {
+		explainer: "This condition can be specified using [Datadog Search](\(urls.datadog_search_syntax)) syntax."
+		supported_syntaxes: [_datadog_search_syntax]
+	}
+}
+
+_multi_condition: {
+	type: condition: {
+		explainer: """
+			This condition supports multiple syntaxes, as laid out in **Supported syntaxes** below.
+			"""
+		supported_syntaxes: [_vrl_syntax, _datadog_search_syntax]
+	}
+}
+
 _coercing_fields: """
 	Key/value pairs representing mapped log field names and types. This is used to
 	coerce log fields from strings into their proper types. The available types are
