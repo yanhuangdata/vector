@@ -1,5 +1,5 @@
 use crate::{
-    codecs::{DecodingConfig, FramingConfig, ParserConfig},
+    codecs::decoding::{DecodingConfig, DeserializerConfig, FramingConfig},
     config::{DataType, GenerateConfig, Resource, SourceConfig, SourceContext, SourceDescription},
     serde::{default_decoding, default_framing_message_based},
     tls::{MaybeTlsSettings, TlsConfig},
@@ -23,7 +23,7 @@ pub struct AwsKinesisFirehoseConfig {
     #[serde(default = "default_framing_message_based")]
     framing: Box<dyn FramingConfig>,
     #[serde(default = "default_decoding")]
-    decoding: Box<dyn ParserConfig>,
+    decoding: Box<dyn DeserializerConfig>,
 }
 
 #[derive(Derivative, Copy, Clone, Debug, Deserialize, Serialize, PartialEq)]

@@ -1,5 +1,8 @@
 use crate::{
-    codecs::{self, DecodingConfig, FramingConfig, ParserConfig},
+    codecs::{
+        self,
+        decoding::{DecodingConfig, DeserializerConfig, FramingConfig},
+    },
     config::{
         log_schema, DataType, GenerateConfig, Resource, SourceConfig, SourceContext,
         SourceDescription,
@@ -47,7 +50,7 @@ pub struct DatadogAgentConfig {
     #[serde(default = "default_framing_message_based")]
     framing: Box<dyn FramingConfig>,
     #[serde(default = "default_decoding")]
-    decoding: Box<dyn ParserConfig>,
+    decoding: Box<dyn DeserializerConfig>,
 }
 
 inventory::submit! {
@@ -354,7 +357,7 @@ struct LogMsg {
 mod tests {
     use super::{DatadogAgentConfig, LogMsg};
     use crate::{
-        codecs::{self, BytesCodec, BytesParser},
+        codecs::{self, BytesDecoder, BytesDeserializer},
         config::{log_schema, SourceConfig, SourceContext},
         event::{Event, EventStatus},
         serde::{default_decoding, default_framing_message_based},
@@ -393,8 +396,10 @@ mod tests {
             let body = Bytes::from(serde_json::to_string(&msgs).unwrap());
             let api_key = None;
 
-            let decoder =
-                codecs::Decoder::new(Box::new(BytesCodec::new()), Box::new(BytesParser::new()));
+            let decoder = codecs::Decoder::new(
+                Box::new(BytesDecoder::new()),
+                Box::new(BytesDeserializer::new()),
+            );
             let source = DatadogAgentSource::new(true, decoder);
             let events = source.decode_body(body, api_key).unwrap();
             assert_eq!(events.len(), msgs.len());

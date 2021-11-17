@@ -1,5 +1,5 @@
 use crate::{
-    codecs::{BoxedFramingError, CharacterDelimitedCodec},
+    codecs::{decoding::BoxedFramingError, CharacterDelimitedDecoder},
     config::{log_schema, DataType, SourceConfig, SourceContext, SourceDescription},
     event::{BatchNotifier, Event, LogEvent, Value},
     internal_events::{BytesReceived, JournaldEventsReceived, JournaldInvalidRecordError},
@@ -418,7 +418,7 @@ fn start_journalctl(
 
     let stream = FramedRead::new(
         child.stdout.take().unwrap(),
-        CharacterDelimitedCodec::new('\n'),
+        CharacterDelimitedDecoder::new('\n'),
     )
     .boxed();
 

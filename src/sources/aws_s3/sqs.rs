@@ -1,5 +1,5 @@
 use crate::{
-    codecs::{CharacterDelimitedCodec, FramingError},
+    codecs::{decoding::FramingError, CharacterDelimitedDecoder},
     config::log_schema,
     event::Event,
     internal_events::aws_s3::source::{
@@ -408,7 +408,7 @@ impl IngestorProcess {
                 // the case that the same vector instance processes the same message.
                 let mut read_error: Option<Box<dyn FramingError>> = None;
                 let lines: Box<dyn Stream<Item = Bytes> + Send + Unpin> = Box::new(
-                    FramedRead::new(object_reader, CharacterDelimitedCodec::new('\n'))
+                    FramedRead::new(object_reader, CharacterDelimitedDecoder::new('\n'))
                         .map(|res| {
                             res.map_err(|err| {
                                 read_error = Some(err);
