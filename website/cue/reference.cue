@@ -388,15 +388,19 @@ _values: {
 	supported_syntaxes: [#Syntax, ...#Syntax]
 }
 
+_vrl_syntax: {
+	name: "vrl"
+}
+
+_datadog_search_syntax: {
+	name: "datadog_search"
+}
+
 _vrl_condition: {
 	description: "A [Vector Remap Language](\(urls.vrl_reference)) (VRL) Boolean expression."
 
 	type: condition: {
-		supported_syntaxes: [
-			{
-				name: "vrl"
-			}
-		]
+		supported_syntaxes: [_vrl_syntax]
 	}
 }
 
@@ -404,11 +408,7 @@ _datadog_search_condition: {
 	description: "A [Datadog Search](\(urls.datadog_search_syntax)) query."
 
 	type: condition: {
-		supported_syntaxes: [
-			{
-				name: "datadog_search"
-			}
-		]
+		supported_syntaxes: [_datadog_search_syntax]
 	}
 }
 
@@ -416,14 +416,7 @@ _multi_condition: {
 	description: "insert here later"
 
 	type: condition: {
-		supported_syntaxes: [
-			{
-				name: "datadog_search"
-			},
-			{
-				name: "vrl"
-			}
-		]
+		supported_syntaxes: [_vrl_syntax, _datadog_search_syntax]
 	}
 }
 
