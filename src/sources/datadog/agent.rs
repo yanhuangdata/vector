@@ -12,7 +12,7 @@ use crate::{
     serde::{default_decoding, default_framing_message_based},
     sources::{
         self,
-        util::{ErrorMessage, TcpError},
+        util::{ErrorMessage, StreamDecodingError},
     },
     tls::{MaybeTlsSettings, TlsConfig},
     Pipeline,

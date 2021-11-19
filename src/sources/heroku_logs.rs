@@ -11,7 +11,7 @@ use crate::{
     internal_events::{HerokuLogplexRequestReadError, HerokuLogplexRequestReceived},
     serde::{default_decoding, default_framing_message_based},
     sources::util::{
-        add_query_parameters, ErrorMessage, HttpSource, HttpSourceAuthConfig, TcpError,
+        add_query_parameters, ErrorMessage, HttpSource, HttpSourceAuthConfig, StreamDecodingError,
     },
     tls::TlsConfig,
 };
