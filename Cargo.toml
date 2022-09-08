@@ -425,6 +425,7 @@ custom-sources-logs = [
   "sources-file",
   "sources-demo_logs",
   "sources-stdin",
+  "sources-http"
 ]
 
 sources-logs = [
@@ -609,6 +610,8 @@ custom-sinks-logs = [
   "sinks-console",
   "sinks-file",
   "sinks-kafka",
+  "sinks-blackhole",
+  "sinks-memory_queue"
 ]
 
 sinks-logs = [
@@ -669,6 +672,7 @@ sinks-aws_sqs = ["rusoto", "rusoto_sqs"]
 sinks-azure_blob = ["azure_core", "azure_storage", "reqwest", "uuid"]
 sinks-azure_monitor_logs = []
 sinks-blackhole = []
+sinks-memory_queue = []
 sinks-clickhouse = []
 sinks-console = []
 sinks-datadog_archives = ["sinks-aws_s3", "sinks-azure_blob", "sinks-gcp"]

@@ -25,23 +25,23 @@ use warp::http::{HeaderMap, HeaderValue};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct SimpleHttpConfig {
-    address: SocketAddr,
+    pub address: SocketAddr,
     #[serde(default)]
-    encoding: Option<Encoding>,
+    pub encoding: Option<Encoding>,
     #[serde(default)]
-    headers: Vec<String>,
+    pub headers: Vec<String>,
     #[serde(default)]
-    query_parameters: Vec<String>,
-    tls: Option<TlsConfig>,
-    auth: Option<HttpSourceAuthConfig>,
+    pub query_parameters: Vec<String>,
+    pub tls: Option<TlsConfig>,
+    pub auth: Option<HttpSourceAuthConfig>,
     #[serde(default = "crate::serde::default_true")]
-    strict_path: bool,
+    pub strict_path: bool,
     #[serde(default = "default_path")]
-    path: String,
+    pub path: String,
     #[serde(default = "default_path_key")]
-    path_key: String,
-    framing: Option<Box<dyn FramingConfig>>,
-    decoding: Option<Box<dyn ParserConfig>>,
+    pub path_key: String,
+    pub framing: Option<Box<dyn FramingConfig>>,
+    pub decoding: Option<Box<dyn ParserConfig>>,
 }
 
 inventory::submit! {

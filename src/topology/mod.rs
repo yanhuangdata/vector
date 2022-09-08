@@ -51,6 +51,11 @@ type Outputs = HashMap<OutputId, fanout::ControlChannel>;
 type WatchTx = watch::Sender<Outputs>;
 pub type WatchRx = watch::Receiver<Outputs>;
 
+pub static mut GLOBAL_TX: Option<&mut futures::channel::mpsc::Sender<Event>> = None;
+pub static mut GLOBAL_RX: Option<&mut futures::channel::mpsc::Receiver<Event>> = None;
+pub static mut GLOBAL_VEC_TX: Option<&mut futures::channel::mpsc::Sender<Vec<Event>>> = None;
+pub static mut GLOBAL_VEC_RX: Option<&mut futures::channel::mpsc::Receiver<Vec<Event>>> = None;
+
 pub async fn start_validated(
     config: Config,
     diff: ConfigDiff,
@@ -77,6 +82,24 @@ pub async fn build_or_log_errors(
     diff: &ConfigDiff,
     buffers: HashMap<ComponentKey, BuiltBuffer>,
 ) -> Option<Pieces> {
+
+    unsafe {
+        if GLOBAL_VEC_TX.is_none() && GLOBAL_VEC_RX.is_none() {
+            let (g_tx, g_rx) = futures::channel::mpsc::channel(1000);
+            let g_tx_new = Box::new(g_tx);
+            let g_rx_new = Box::new(g_rx);
+        
+            let (g_vec_tx, g_vec_rx) = futures::channel::mpsc::channel(50);
+            let g_vec_tx_new = Box::new(g_vec_tx);
+            let g_vec_rx_new = Box::new(g_vec_rx);
+        
+            GLOBAL_TX = Some(Box::leak(g_tx_new));
+            GLOBAL_RX = Some(Box::leak(g_rx_new));
+            GLOBAL_VEC_TX = Some(Box::leak(g_vec_tx_new));
+            GLOBAL_VEC_RX = Some(Box::leak(g_vec_rx_new));
+        }
+    }
+    
     match builder::build_pieces(config, diff, buffers).await {
         Err(errors) => {
             for error in errors {
