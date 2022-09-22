@@ -426,7 +426,8 @@ custom-sources-logs = [
   "sources-demo_logs",
   "sources-stdin",
   "sources-http",
-  "sources-kafka"
+  "sources-kafka",
+  "sources-vector"
 ]
 
 sources-logs = [
