@@ -15,7 +15,7 @@ enum KafkaError {
 #[derive(Clone, Copy, Debug, Derivative, Deserialize, Serialize)]
 #[derivative(Default)]
 #[serde(rename_all = "lowercase")]
-pub(crate) enum KafkaCompression {
+pub enum KafkaCompression {
     #[derivative(Default)]
     None,
     Gzip,
@@ -25,7 +25,7 @@ pub(crate) enum KafkaCompression {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub(crate) struct KafkaAuthConfig {
+pub struct KafkaAuthConfig {
     pub(crate) sasl: Option<KafkaSaslConfig>,
     pub(crate) tls: Option<KafkaTlsConfig>,
 }

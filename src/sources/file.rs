@@ -79,7 +79,7 @@ pub struct FileConfig {
     pub glob_minimum_cooldown_ms: u64,
     // Deprecated name
     #[serde(alias = "fingerprinting")]
-    fingerprint: FingerprintConfig,
+    pub fingerprint: FingerprintConfig,
     pub ignore_not_found: bool,
     pub message_start_indicator: Option<String>,
     pub multi_line_timeout: u64, // millis
@@ -91,7 +91,8 @@ pub struct FileConfig {
     pub line_delimiter: String,
     pub encoding: Option<EncodingConfig>,
     #[serde(default, deserialize_with = "bool_or_struct")]
-    acknowledgements: AcknowledgementsConfig,
+    pub acknowledgements: AcknowledgementsConfig,
+    pub keep_watching: bool,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq)]
@@ -194,6 +195,7 @@ impl Default for FileConfig {
             line_delimiter: "\n".to_string(),
             encoding: None,
             acknowledgements: Default::default(),
+            keep_watching: true,
         }
     }
 }
@@ -349,6 +351,7 @@ pub fn file_source(
         (None, shutdown.clone().map(|_| ()).boxed())
     };
 
+    let keep_watching = config.keep_watching;
     let checkpoints = checkpointer.view();
     Box::pin(async move {
         info!(message = "Starting file server.", include = ?include, exclude = ?exclude);
@@ -420,7 +423,12 @@ pub fn file_source(
         let span = info_span!("file_server");
         spawn_blocking(move || {
             let _enter = span.enter();
-            let result = file_server.run(tx, shutdown, shutdown_checkpointer, checkpointer);
+            let result = if keep_watching {
+                file_server.run(tx, shutdown, shutdown_checkpointer, checkpointer)
+            } else {
+                file_server.run_batch(tx, shutdown, shutdown_checkpointer, checkpointer)
+            };
+            println!("file_server run returned");
             emit!(FileOpen { count: 0 });
             // Panic if we encounter any error originating from the file server.
             // We're at the `spawn_blocking` call, the panic will be caught and

@@ -40,28 +40,28 @@ pub enum HttpMethod {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub(super) struct SimpleHttpConfig {
-    address: SocketAddr,
+pub struct SimpleHttpConfig {
+    pub address: SocketAddr,
     #[serde(default)]
-    encoding: Option<Encoding>,
+    pub encoding: Option<Encoding>,
     #[serde(default)]
-    headers: Vec<String>,
+    pub headers: Vec<String>,
     #[serde(default)]
-    query_parameters: Vec<String>,
-    tls: Option<TlsEnableableConfig>,
-    auth: Option<HttpSourceAuthConfig>,
+    pub query_parameters: Vec<String>,
+    pub tls: Option<TlsEnableableConfig>,
+    pub auth: Option<HttpSourceAuthConfig>,
     #[serde(default = "crate::serde::default_true")]
-    strict_path: bool,
+    pub strict_path: bool,
     #[serde(default = "default_path")]
-    path: String,
+    pub path: String,
     #[serde(default = "default_path_key")]
-    path_key: String,
+    pub path_key: String,
     #[serde(default)]
-    method: HttpMethod,
-    framing: Option<FramingConfig>,
-    decoding: Option<DeserializerConfig>,
+    pub method: HttpMethod,
+    pub framing: Option<FramingConfig>,
+    pub decoding: Option<DeserializerConfig>,
     #[serde(default, deserialize_with = "bool_or_struct")]
-    acknowledgements: AcknowledgementsConfig,
+    pub acknowledgements: AcknowledgementsConfig,
 }
 
 inventory::submit! {
