@@ -1,17 +1,21 @@
-use crate::event::PathComponent;
-use crate::event::{EventFinalizers, Finalizable, LogEvent};
-use crate::internal_events::DatadogEventsProcessed;
-use crate::sinks::util::encoding::{EncodingConfigFixed, StandardJsonEncoding, TimestampFormat};
-use crate::sinks::util::{Compression, ElementCount, RequestBuilder};
-use std::io;
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
-use vector_core::buffers::Ackable;
-use vector_core::ByteSizeOf;
+use bytes::Bytes;
+use lookup::lookup_v2::OwnedSegment;
+use vector_core::{buffers::Ackable, ByteSizeOf};
+
+use crate::{
+    event::{EventFinalizers, Finalizable, LogEvent},
+    sinks::util::{
+        encoding::{EncodingConfigFixed, StandardJsonEncoding, TimestampFormat},
+        request_builder::EncodeResult,
+        Compression, ElementCount, RequestBuilder,
+    },
+};
 
 #[derive(Clone)]
 pub struct DatadogEventsRequest {
-    pub body: Vec<u8>,
+    pub body: Bytes,
     pub metadata: Metadata,
 }
 
@@ -62,7 +66,7 @@ impl RequestBuilder<LogEvent> for DatadogEventsRequestBuilder {
     type Metadata = Metadata;
     type Events = LogEvent;
     type Encoder = EncodingConfigFixed<StandardJsonEncoding>;
-    type Payload = Vec<u8>;
+    type Payload = Bytes;
     type Request = DatadogEventsRequest;
     type Error = io::Error;
 
@@ -83,13 +87,15 @@ impl RequestBuilder<LogEvent> for DatadogEventsRequestBuilder {
         (metadata, log)
     }
 
-    fn build_request(&self, metadata: Self::Metadata, body: Self::Payload) -> Self::Request {
-        // deprecated - kept for backwards compatibility
-        emit!(&DatadogEventsProcessed {
-            byte_size: body.len(),
-        });
-
-        DatadogEventsRequest { body, metadata }
+    fn build_request(
+        &self,
+        metadata: Self::Metadata,
+        payload: EncodeResult<Self::Payload>,
+    ) -> Self::Request {
+        DatadogEventsRequest {
+            body: payload.into_payload(),
+            metadata,
+        }
     }
 }
 
@@ -112,7 +118,7 @@ fn encoder() -> EncodingConfigFixed<StandardJsonEncoding> {
                 "title",
             ]
             .iter()
-            .map(|field| vec![PathComponent::Key((*field).into())])
+            .map(|field| vec![OwnedSegment::Field((*field).into())].into())
             .collect(),
         ),
         // DataDog Event API requires unix timestamp.

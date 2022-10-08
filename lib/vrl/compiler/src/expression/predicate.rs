@@ -1,10 +1,17 @@
-use crate::expression::{Block, Expr, Resolved};
-use crate::parser::Node;
-use crate::{value::Kind, Context, Expression, Span, State, TypeDef, Value};
-use diagnostic::{DiagnosticError, Label, Note, Urls};
 use std::fmt;
 
-pub type Result = std::result::Result<Predicate, Error>;
+use diagnostic::{DiagnosticMessage, Label, Note, Urls};
+use value::Value;
+
+use crate::{
+    expression::{Expr, Resolved},
+    parser::Node,
+    state::{ExternalEnv, LocalEnv},
+    value::Kind,
+    Context, Expression, Span, TypeDef,
+};
+
+pub(crate) type Result = std::result::Result<Predicate, Error>;
 
 #[derive(Clone, PartialEq)]
 pub struct Predicate {
@@ -12,21 +19,28 @@ pub struct Predicate {
 }
 
 impl Predicate {
-    pub fn new(node: Node<Block>, state: &State) -> Result {
-        let (span, block) = node.take();
-        let type_def = block.type_def(state);
+    pub fn new(node: Node<Vec<Expr>>, state: (&LocalEnv, &ExternalEnv)) -> Result {
+        let (span, exprs) = node.take();
+        let type_def = exprs
+            .last()
+            .map(|expr| expr.type_def(state))
+            .unwrap_or_else(TypeDef::null);
 
-        if !type_def.is_boolean() {
+        if type_def.is_fallible() {
             return Err(Error {
-                variant: ErrorVariant::NonBoolean(type_def.kind()),
+                variant: ErrorVariant::Fallible,
                 span,
-                labels: vec![],
             });
         }
 
-        Ok(Self {
-            inner: block.into_inner(),
-        })
+        if !type_def.is_boolean() {
+            return Err(Error {
+                variant: ErrorVariant::NonBoolean(type_def.into()),
+                span,
+            });
+        }
+
+        Ok(Self { inner: exprs })
     }
 
     pub fn new_unchecked(inner: Vec<Expr>) -> Self {
@@ -40,10 +54,10 @@ impl Expression for Predicate {
             .iter()
             .map(|expr| expr.resolve(ctx))
             .collect::<std::result::Result<Vec<_>, _>>()
-            .map(|mut v| v.pop().unwrap_or(Value::Null))
+            .map(|mut v| v.pop().unwrap_or(Value::Boolean(false)))
     }
 
-    fn type_def(&self, state: &State) -> TypeDef {
+    fn type_def(&self, state: (&LocalEnv, &ExternalEnv)) -> TypeDef {
         let mut type_defs = self
             .inner
             .iter()
@@ -55,9 +69,22 @@ impl Expression for Predicate {
         let fallible = type_defs.iter().any(TypeDef::is_fallible);
 
         // The last expression determines the resulting value of the predicate.
-        let type_def = type_defs.pop().unwrap_or_else(|| TypeDef::new().null());
+        let type_def = type_defs.pop().unwrap_or_else(TypeDef::boolean);
 
         type_def.with_fallibility(fallible)
+    }
+
+    fn compile_to_vm(
+        &self,
+        vm: &mut crate::vm::Vm,
+        state: (&mut LocalEnv, &mut ExternalEnv),
+    ) -> std::result::Result<(), String> {
+        let (local, external) = state;
+
+        for inner in &self.inner {
+            inner.compile_to_vm(vm, (local, external))?;
+        }
+        Ok(())
     }
 }
 
@@ -108,13 +135,14 @@ pub struct Error {
     pub(crate) variant: ErrorVariant,
 
     span: Span,
-    labels: Vec<Label>,
 }
 
 #[derive(thiserror::Error, Debug)]
-pub enum ErrorVariant {
+pub(crate) enum ErrorVariant {
     #[error("non-boolean predicate")]
     NonBoolean(Kind),
+    #[error("fallible predicate")]
+    Fallible,
 }
 
 impl fmt::Display for Error {
@@ -129,12 +157,13 @@ impl std::error::Error for Error {
     }
 }
 
-impl DiagnosticError for Error {
+impl DiagnosticMessage for Error {
     fn code(&self) -> usize {
         use ErrorVariant::*;
 
         match &self.variant {
             NonBoolean(..) => 102,
+            Fallible => 111,
         }
     }
 
@@ -145,6 +174,10 @@ impl DiagnosticError for Error {
             NonBoolean(kind) => vec![
                 Label::primary("this predicate must resolve to a boolean", self.span),
                 Label::context(format!("instead it resolves to {}", kind), self.span),
+            ],
+            Fallible => vec![
+                Label::primary("this predicate can result in runtime error", self.span),
+                Label::context("handle the error case to ensure runtime success", self.span),
             ],
         }
     }
@@ -160,6 +193,7 @@ impl DiagnosticError for Error {
                     Urls::expression_docs_url("#if"),
                 ),
             ],
+            Fallible => vec![Note::SeeErrorDocs],
         }
     }
 }

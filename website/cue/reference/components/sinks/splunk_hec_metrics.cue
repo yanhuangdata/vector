@@ -13,14 +13,14 @@ components: sinks: splunk_hec_metrics: {
 	}
 
 	features: {
-		buffer: enabled:      true
+		acknowledgements: true
 		healthcheck: enabled: true
 		send: {
 			batch: {
 				enabled:      true
 				common:       false
 				max_bytes:    10_000_000
-				timeout_secs: 1
+				timeout_secs: 1.0
 			}
 			compression: {
 				enabled: true
@@ -36,7 +36,6 @@ components: sinks: splunk_hec_metrics: {
 			}
 			tls: {
 				enabled:                true
-				can_enable:             false
 				can_verify_certificate: true
 				can_verify_hostname:    true
 				enabled_default:        false
@@ -65,7 +64,7 @@ components: sinks: splunk_hec_metrics: {
 		notices: []
 	}
 
-	configuration: {
+	configuration: sinks._splunk_hec.configuration & {
 		default_namespace: {
 			common: false
 			description: """
@@ -127,13 +126,6 @@ components: sinks: splunk_hec_metrics: {
 				syntax: "template"
 			}
 		}
-		token: {
-			description: "Your Splunk HEC token."
-			required:    true
-			type: string: {
-				examples: ["${SPLUNK_HEC_TOKEN}", "A94A8FE5CCB19BA61C4C08"]
-			}
-		}
 	}
 
 	input: {
@@ -146,7 +138,10 @@ components: sinks: splunk_hec_metrics: {
 			set:          false
 			summary:      false
 		}
+		traces: false
 	}
 
 	telemetry: components.sinks.splunk_hec_logs.telemetry
+
+	how_it_works: sinks._splunk_hec.how_it_works
 }

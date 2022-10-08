@@ -1,5 +1,7 @@
-use crate::parse_key_value::{ParseKeyValueFn, Whitespace};
+use ::value::Value;
 use vrl::prelude::*;
+
+use crate::parse_key_value::{ParseKeyValueFn, Whitespace};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ParseLogFmt;
@@ -34,8 +36,8 @@ impl Function for ParseLogFmt {
 
     fn compile(
         &self,
-        _state: &state::Compiler,
-        _ctx: &FunctionCompileContext,
+        _state: (&mut state::LocalEnv, &mut state::ExternalEnv),
+        _ctx: &mut FunctionCompileContext,
         mut arguments: ArgumentList,
     ) -> Compiled {
         let value = arguments.required("value");
@@ -54,5 +56,22 @@ impl Function for ParseLogFmt {
             whitespace,
             standalone_key,
         }))
+    }
+
+    fn call_by_vm(&self, _ctx: &mut Context, args: &mut VmArgumentList) -> Resolved {
+        let bytes = args.required("value");
+
+        let key_value_delimiter = Value::from("=");
+        let field_delimiter = Value::from(" ");
+        let whitespace = Whitespace::Lenient;
+        let standalone_key = Value::from(true);
+
+        super::parse_key_value::parse_key_value(
+            bytes,
+            key_value_delimiter,
+            field_delimiter,
+            standalone_key,
+            whitespace,
+        )
     }
 }

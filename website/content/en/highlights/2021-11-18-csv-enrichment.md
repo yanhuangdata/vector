@@ -24,7 +24,7 @@ are now available:
 
 - [`get_enrichment_table_record`][get_enrichment_table_record] works by looking
   up a single row CSV file
-- [`find_enrichment_table_records`][get_enrichment_table_records] can return
+- [`find_enrichment_table_records`][find_enrichment_table_records] can return
   multiple rows in an array format for more complex use cases
 
 For example, when collecting events from IoT devices, you may want to keep your
@@ -72,9 +72,9 @@ inputs = ["vector_agents"]
 source = '''
 . = parse_json!(.message)
 
-iot_remap = del(.iot_remap)
+code = del(.code)
 
-row = get_enrichment_table_record!("codes", { "iot_remap": iot_remap })
+row = get_enrichment_table_record!("iot_remap", { "code":  code })
 .message = row.message
 '''
 ```

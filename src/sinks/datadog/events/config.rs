@@ -1,21 +1,25 @@
-use crate::config::{DataType, GenerateConfig, SinkConfig, SinkContext};
-use crate::sinks::{Healthcheck, VectorSink};
-
-use crate::http::HttpClient;
-use crate::sinks::datadog::events::service::{DatadogEventsResponse, DatadogEventsService};
-use crate::sinks::datadog::events::sink::DatadogEventsSink;
-use crate::sinks::datadog::{
-    get_api_base_endpoint, get_api_validate_endpoint, healthcheck, Region,
-};
-use crate::sinks::util::http::HttpStatusRetryLogic;
-use crate::sinks::util::ServiceBuilderExt;
-use crate::sinks::util::TowerRequestConfig;
-use crate::tls::TlsConfig;
 use futures::FutureExt;
 use indoc::indoc;
 use serde::{Deserialize, Serialize};
 use tower::ServiceBuilder;
 use vector_core::config::proxy::ProxyConfig;
+
+use crate::{
+    config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig, SinkContext},
+    http::HttpClient,
+    sinks::{
+        datadog::{
+            events::{
+                service::{DatadogEventsResponse, DatadogEventsService},
+                sink::DatadogEventsSink,
+            },
+            get_api_base_endpoint, get_api_validate_endpoint, healthcheck, Region,
+        },
+        util::{http::HttpStatusRetryLogic, ServiceBuilderExt, TowerRequestConfig},
+        Healthcheck, VectorSink,
+    },
+    tls::{MaybeTlsSettings, TlsEnableableConfig},
+};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
@@ -26,11 +30,17 @@ pub struct DatadogEventsConfig {
     pub site: Option<String>,
     pub default_api_key: String,
 
-    // Deprecated, not sure it actually makes sense to allow messing with TLS configuration?
-    pub tls: Option<TlsConfig>,
+    pub(super) tls: Option<TlsEnableableConfig>,
 
     #[serde(default)]
     pub request: TowerRequestConfig,
+
+    #[serde(
+        default,
+        deserialize_with = "crate::serde::bool_or_struct",
+        skip_serializing_if = "crate::serde::skip_serializing_if_default"
+    )]
+    acknowledgements: AcknowledgementsConfig,
 }
 
 impl GenerateConfig for DatadogEventsConfig {
@@ -43,14 +53,17 @@ impl GenerateConfig for DatadogEventsConfig {
 }
 
 impl DatadogEventsConfig {
-    fn get_api_events_endpoint(&self) -> String {
+    fn get_api_events_endpoint(&self) -> http::Uri {
         let api_base_endpoint =
             get_api_base_endpoint(self.endpoint.as_ref(), self.site.as_ref(), self.region);
-        format!("{}/api/v1/events", api_base_endpoint)
+
+        // We know this URI will be valid since we have just built it up ourselves.
+        http::Uri::try_from(format!("{}/api/v1/events", api_base_endpoint)).expect("URI not valid")
     }
 
     fn build_client(&self, proxy: &ProxyConfig) -> crate::Result<HttpClient> {
-        let client = HttpClient::new(None, proxy)?;
+        let tls = MaybeTlsSettings::from_config(&self.tls, false)?;
+        let client = HttpClient::new(tls, proxy)?;
         Ok(client)
     }
 
@@ -80,7 +93,7 @@ impl DatadogEventsConfig {
             acker: cx.acker(),
         };
 
-        Ok(VectorSink::Stream(Box::new(sink)))
+        Ok(VectorSink::from_event_streamsink(sink))
     }
 }
 
@@ -95,12 +108,16 @@ impl SinkConfig for DatadogEventsConfig {
         Ok((sink, healthcheck))
     }
 
-    fn input_type(&self) -> DataType {
-        DataType::Log
+    fn input(&self) -> Input {
+        Input::log()
     }
 
     fn sink_type(&self) -> &'static str {
         "datadog_events"
+    }
+
+    fn acknowledgements(&self) -> Option<&AcknowledgementsConfig> {
+        Some(&self.acknowledgements)
     }
 }
 

@@ -2,18 +2,19 @@
 
 #![deny(missing_docs)]
 
+use std::{
+    collections::{hash_map::Entry, HashMap},
+    hash::Hash,
+    pin::Pin,
+    task::{Context, Poll},
+    time::Duration,
+};
+
 use bytes::{Bytes, BytesMut};
 use futures::{Stream, StreamExt};
 use pin_project::pin_project;
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::{hash_map::Entry, HashMap};
-use std::hash::Hash;
-use std::time::Duration;
-use std::{
-    pin::Pin,
-    task::{Context, Poll},
-};
 use tokio_util::time::delay_queue::{DelayQueue, Key};
 
 /// The mode of operation of the line aggregator.
@@ -156,7 +157,7 @@ where
 {
     /// `K` - file name, or other line source,
     /// `Bytes` - the line data,
-    /// `C` - the context related the the line data.
+    /// `C` - the context related to the line data.
     type Item = (K, Bytes, C);
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -210,8 +211,7 @@ where
                 Poll::Pending => {
                     // We didn't get any lines from `inner`, so we just give
                     // a line from keys that have hit their timeout.
-                    while let Poll::Ready(Some(Ok(expired_key))) =
-                        this.logic.timeouts.poll_expired(cx)
+                    while let Poll::Ready(Some(expired_key)) = this.logic.timeouts.poll_expired(cx)
                     {
                         let key = expired_key.into_inner();
                         if let Some((_, aggregate)) = this.logic.buffers.remove(&key) {
@@ -387,10 +387,11 @@ impl<C> Aggregate<C> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use futures::SinkExt;
     use pretty_assertions::assert_eq;
+
+    use super::*;
 
     #[tokio::test]
     async fn mode_continue_through_1() {
@@ -560,7 +561,7 @@ mod tests {
         run_and_assert(&lines, config, &expected).await;
     }
 
-    /// https://github.com/timberio/vector/issues/3237
+    /// https://github.com/vectordotdev/vector/issues/3237
     #[tokio::test]
     async fn two_lines_emit_with_continue_through() {
         let lines = vec![

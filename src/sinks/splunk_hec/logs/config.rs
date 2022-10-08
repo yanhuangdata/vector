@@ -1,37 +1,37 @@
-use futures_util::FutureExt;
-use tower::ServiceBuilder;
-use vector_core::{sink::VectorSink, transform::DataType};
+use std::sync::Arc;
 
+use futures_util::FutureExt;
+use serde::{Deserialize, Serialize};
+use tower::ServiceBuilder;
+use vector_core::sink::VectorSink;
+
+use super::{encoder::HecLogsEncoder, request_builder::HecLogsRequestBuilder, sink::HecLogsSink};
 use crate::{
-    config::{GenerateConfig, SinkConfig, SinkContext},
+    config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig, SinkContext},
     http::HttpClient,
     sinks::{
         splunk_hec::common::{
-            build_healthcheck, create_client, host_key,
-            retry::HecRetryLogic,
+            acknowledgements::HecClientAcknowledgementsConfig,
+            build_healthcheck, build_http_batch_service, create_client, host_key,
             service::{HecService, HttpRequestBuilder},
             SplunkHecDefaultBatchSettings,
         },
         util::{
-            encoding::EncodingConfig, BatchConfig, Compression, ServiceBuilderExt,
-            TowerRequestConfig,
+            encoding::EncodingConfig, http::HttpRetryLogic, BatchConfig, Compression,
+            ServiceBuilderExt, TowerRequestConfig,
         },
         Healthcheck,
     },
     template::Template,
-    tls::TlsOptions,
+    tls::TlsConfig,
 };
-
-use serde::{Deserialize, Serialize};
-
-use super::{encoder::HecLogsEncoder, request_builder::HecLogsRequestBuilder, sink::HecLogsSink};
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct HecSinkLogsConfig {
-    pub token: String,
+pub struct HecLogsSinkConfig {
     // Deprecated name
-    #[serde(alias = "host")]
+    #[serde(alias = "token")]
+    pub default_token: String,
     pub endpoint: String,
     #[serde(default = "host_key")]
     pub host_key: String,
@@ -47,13 +47,17 @@ pub struct HecSinkLogsConfig {
     pub batch: BatchConfig<SplunkHecDefaultBatchSettings>,
     #[serde(default)]
     pub request: TowerRequestConfig,
-    pub tls: Option<TlsOptions>,
+    pub tls: Option<TlsConfig>,
+    #[serde(default)]
+    pub acknowledgements: HecClientAcknowledgementsConfig,
+    // This settings is relevant only for the `humio_logs` sink and should be left to None everywhere else
+    pub timestamp_nanos_key: Option<String>,
 }
 
-impl GenerateConfig for HecSinkLogsConfig {
+impl GenerateConfig for HecLogsSinkConfig {
     fn generate_config() -> toml::Value {
         toml::Value::try_from(Self {
-            token: "${VECTOR_SPLUNK_HEC_TOKEN}".to_owned(),
+            default_token: "${VECTOR_SPLUNK_HEC_TOKEN}".to_owned(),
             endpoint: "endpoint".to_owned(),
             host_key: host_key(),
             indexed_fields: vec![],
@@ -65,6 +69,8 @@ impl GenerateConfig for HecSinkLogsConfig {
             batch: BatchConfig::default(),
             request: TowerRequestConfig::default(),
             tls: None,
+            acknowledgements: Default::default(),
+            timestamp_nanos_key: None,
         })
         .unwrap()
     }
@@ -72,45 +78,69 @@ impl GenerateConfig for HecSinkLogsConfig {
 
 #[async_trait::async_trait]
 #[typetag::serde(name = "splunk_hec_logs")]
-impl SinkConfig for HecSinkLogsConfig {
+impl SinkConfig for HecLogsSinkConfig {
     async fn build(&self, cx: SinkContext) -> crate::Result<(VectorSink, Healthcheck)> {
         let client = create_client(&self.tls, cx.proxy())?;
-        let healthcheck =
-            build_healthcheck(self.endpoint.clone(), self.token.clone(), client.clone()).boxed();
+        let healthcheck = build_healthcheck(
+            self.endpoint.clone(),
+            self.default_token.clone(),
+            client.clone(),
+        )
+        .boxed();
         let sink = self.build_processor(client, cx)?;
 
         Ok((sink, healthcheck))
     }
 
-    fn input_type(&self) -> DataType {
-        DataType::Log
+    fn input(&self) -> Input {
+        Input::log()
     }
 
     fn sink_type(&self) -> &'static str {
         "splunk_hec_logs"
     }
+
+    fn acknowledgements(&self) -> Option<&AcknowledgementsConfig> {
+        Some(&self.acknowledgements.inner)
+    }
 }
 
-impl HecSinkLogsConfig {
+impl HecLogsSinkConfig {
     pub fn build_processor(
         &self,
         client: HttpClient,
         cx: SinkContext,
     ) -> crate::Result<VectorSink> {
+        let ack_client = if self.acknowledgements.indexer_acknowledgements_enabled {
+            Some(client.clone())
+        } else {
+            None
+        };
+
         let request_builder = HecLogsRequestBuilder {
             encoding: self.encoding.clone(),
             compression: self.compression,
         };
 
         let request_settings = self.request.unwrap_with(&TowerRequestConfig::default());
-        let http_request_builder = HttpRequestBuilder {
-            endpoint: self.endpoint.clone(),
-            token: self.token.clone(),
-            compression: self.compression,
-        };
-        let service = ServiceBuilder::new()
-            .settings(request_settings, HecRetryLogic)
-            .service(HecService::new(client, http_request_builder));
+        let http_request_builder = Arc::new(HttpRequestBuilder::new(
+            self.endpoint.clone(),
+            self.default_token.clone(),
+            self.compression,
+        ));
+        let http_service = ServiceBuilder::new()
+            .settings(request_settings, HttpRetryLogic)
+            .service(build_http_batch_service(
+                client,
+                Arc::clone(&http_request_builder),
+            ));
+
+        let service = HecService::new(
+            http_service,
+            ack_client,
+            http_request_builder,
+            self.acknowledgements.clone(),
+        );
 
         let batch_settings = self.batch.into_batcher_settings()?;
 
@@ -124,9 +154,10 @@ impl HecSinkLogsConfig {
             index: self.index.clone(),
             indexed_fields: self.indexed_fields.clone(),
             host: self.host_key.clone(),
+            timestamp_nanos_key: self.timestamp_nanos_key.clone(),
         };
 
-        Ok(VectorSink::Stream(Box::new(sink)))
+        Ok(VectorSink::from_event_streamsink(sink))
     }
 }
 
@@ -135,7 +166,7 @@ impl HecSinkLogsConfig {
 #[serde(deny_unknown_fields)]
 struct HecSinkCompatConfig {
     #[serde(flatten)]
-    config: HecSinkLogsConfig,
+    config: HecLogsSinkConfig,
 }
 
 #[async_trait::async_trait]
@@ -145,21 +176,25 @@ impl SinkConfig for HecSinkCompatConfig {
         self.config.build(cx).await
     }
 
-    fn input_type(&self) -> DataType {
-        self.config.input_type()
+    fn input(&self) -> Input {
+        self.config.input()
     }
 
     fn sink_type(&self) -> &'static str {
         "splunk_hec"
     }
+
+    fn acknowledgements(&self) -> Option<&AcknowledgementsConfig> {
+        self.config.acknowledgements()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::HecSinkLogsConfig;
+    use super::HecLogsSinkConfig;
 
     #[test]
     fn generate_config() {
-        crate::test_util::test_generate_config::<HecSinkLogsConfig>();
+        crate::test_util::test_generate_config::<HecLogsSinkConfig>();
     }
 }

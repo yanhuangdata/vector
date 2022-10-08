@@ -13,14 +13,14 @@ components: sinks: influxdb_metrics: {
 	}
 
 	features: {
-		buffer: enabled:      false
+		acknowledgements: true
 		healthcheck: enabled: true
 		send: {
 			batch: {
 				enabled:      true
 				common:       false
 				max_events:   20
-				timeout_secs: 1
+				timeout_secs: 1.0
 			}
 			compression: enabled: false
 			encoding: {
@@ -55,6 +55,15 @@ components: sinks: influxdb_metrics: {
 				examples: ["service"]
 			}
 		}
+		tags: {
+			required:    false
+			common:      false
+			description: "A map of additional key-value pairs that will be attached to each LineProtocol as tags."
+			groups: ["v1", "v2"]
+			type: object: {
+				examples: [{region: "us-west-1"}]
+			}
+		}
 	}
 
 	input: {
@@ -67,6 +76,7 @@ components: sinks: influxdb_metrics: {
 			set:          true
 			summary:      true
 		}
+		traces: false
 	}
 
 	examples: [

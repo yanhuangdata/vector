@@ -1,20 +1,21 @@
-use crate::event::{Event, LogEvent};
-use crate::sinks::aws_kinesis_streams::request_builder::{KinesisRequest, KinesisRequestBuilder};
-use crate::sinks::aws_kinesis_streams::service::KinesisResponse;
-use crate::Error;
-use futures::stream::BoxStream;
-use futures::StreamExt;
-use rand::random;
-use std::num::NonZeroUsize;
-use tower::util::BoxService;
-use vector_core::buffers::Acker;
-use vector_core::partition::NullPartitioner;
-use vector_core::stream::BatcherSettings;
+use std::{fmt, num::NonZeroUsize};
 
-use crate::sinks::util::processed_event::ProcessedEvent;
-use crate::sinks::util::{SinkBuilderExt, StreamSink};
 use async_trait::async_trait;
-use futures::future;
+use futures::{future, stream::BoxStream, StreamExt};
+use rand::random;
+use tower::Service;
+use vector_core::{
+    buffers::Acker,
+    stream::{BatcherSettings, DriverResponse},
+};
+
+use crate::{
+    event::{Event, LogEvent},
+    sinks::{
+        aws_kinesis_streams::request_builder::{KinesisRequest, KinesisRequestBuilder},
+        util::{processed_event::ProcessedEvent, SinkBuilderExt, StreamSink},
+    },
+};
 
 pub type KinesisProcessedEvent = ProcessedEvent<LogEvent, KinesisMetadata>;
 
@@ -22,15 +23,21 @@ pub struct KinesisMetadata {
     pub partition_key: String,
 }
 
-pub struct KinesisSink {
+pub struct KinesisSink<S> {
     pub batch_settings: BatcherSettings,
     pub acker: Acker,
-    pub service: BoxService<Vec<KinesisRequest>, KinesisResponse, Error>,
+    pub service: S,
     pub request_builder: KinesisRequestBuilder,
     pub partition_key_field: Option<String>,
 }
 
-impl KinesisSink {
+impl<S> KinesisSink<S>
+where
+    S: Service<Vec<KinesisRequest>> + Send + 'static,
+    S::Future: Send + 'static,
+    S::Response: DriverResponse + Send + 'static,
+    S::Error: fmt::Debug + Into<crate::Error> + Send,
+{
     async fn run_inner(self: Box<Self>, input: BoxStream<'_, Event>) -> Result<(), ()> {
         let request_builder_concurrency_limit = NonZeroUsize::new(50);
 
@@ -51,8 +58,7 @@ impl KinesisSink {
                     Ok(req) => Some(req),
                 }
             })
-            .batched(NullPartitioner::new(), self.batch_settings)
-            .map(|(_, batch)| batch)
+            .batched(self.batch_settings.into_byte_size_config())
             .into_driver(self.service, self.acker);
 
         sink.run().await
@@ -60,7 +66,13 @@ impl KinesisSink {
 }
 
 #[async_trait]
-impl StreamSink for KinesisSink {
+impl<S> StreamSink<Event> for KinesisSink<S>
+where
+    S: Service<Vec<KinesisRequest>> + Send + 'static,
+    S::Future: Send + 'static,
+    S::Response: DriverResponse + Send + 'static,
+    S::Error: fmt::Debug + Into<crate::Error> + Send,
+{
     async fn run(self: Box<Self>, input: BoxStream<'_, Event>) -> Result<(), ()> {
         self.run_inner(input).await
     }
@@ -71,7 +83,7 @@ pub fn process_log(
     partition_key_field: &Option<String>,
 ) -> Option<KinesisProcessedEvent> {
     let partition_key = if let Some(partition_key_field) = partition_key_field {
-        if let Some(v) = log.get(&partition_key_field) {
+        if let Some(v) = log.get(partition_key_field.as_str()) {
             v.to_string_lossy()
         } else {
             warn!(

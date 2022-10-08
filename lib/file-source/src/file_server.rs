@@ -1,17 +1,3 @@
-use crate::paths_provider::PathsProvider;
-use crate::{
-    checkpointer::{Checkpointer, CheckpointsView},
-    file_watcher::FileWatcher,
-    fingerprinter::{FileFingerprint, Fingerprinter},
-    FileSourceInternalEvents, ReadFrom,
-};
-use bytes::Bytes;
-use chrono::{DateTime, Utc};
-use futures::{
-    future::{select, Either, FutureExt},
-    stream, Future, Sink, SinkExt,
-};
-use indexmap::IndexMap;
 use std::{
     cmp,
     collections::{BTreeMap, HashSet, HashMap},
@@ -20,8 +6,24 @@ use std::{
     sync::Arc,
     time::{self, Duration},
 };
+
+use bytes::Bytes;
+use chrono::{DateTime, Utc};
+use futures::{
+    future::{select, Either},
+    stream, Future, Sink, SinkExt,
+};
+use indexmap::IndexMap;
 use tokio::time::sleep;
 use tracing::{debug, error, info, trace};
+
+use crate::{
+    checkpointer::{Checkpointer, CheckpointsView},
+    file_watcher::FileWatcher,
+    fingerprinter::{FileFingerprint, Fingerprinter},
+    paths_provider::PathsProvider,
+    FileSourceInternalEvents, ReadFrom,
+};
 
 /// `FileServer` is a Source which cooperatively schedules reads over files,
 /// converting the lines of said files into `LogLine` structures. As
@@ -70,17 +72,23 @@ where
     PP: PathsProvider,
     E: FileSourceInternalEvents,
 {
-    pub fn run<C, S>(
+    // The first `shutdown_data` signal here is to stop this file
+    // server from outputting new data; the second
+    // `shutdown_checkpointer` is for finishing the background
+    // checkpoint writer task, which has to wait for all
+    // acknowledgements to be completed.
+    pub fn run<C, S1, S2>(
         self,
         mut chans: C,
-        shutdown: S,
+        mut shutdown_data: S1,
+        mut shutdown_checkpointer: S2,
         mut checkpointer: Checkpointer,
     ) -> Result<Shutdown, <C as Sink<Vec<Line>>>::Error>
     where
         C: Sink<Vec<Line>> + Unpin,
         <C as Sink<Vec<Line>>>::Error: std::error::Error,
-        S: Future + Unpin + Send + 'static,
-        <S as Future>::Output: Clone + Send + Sync,
+        S1: Future + Unpin + Send + 'static,
+        S2: Future + Unpin + Send + 'static,
     {
         let mut fingerprint_buffer = Vec::new();
 
@@ -133,8 +141,6 @@ where
         // We have to do a lot of cloning here to convince the compiler that we
         // aren't going to get away with anything, but none of it should have
         // any perf impact.
-        let mut shutdown = shutdown.shared();
-        let mut shutdown2 = shutdown.clone();
         let emitter = self.emitter.clone();
         let checkpointer = Arc::new(checkpointer);
         let sleep_duration = self.glob_minimum_cooldown;
@@ -142,7 +148,7 @@ where
             loop {
                 let sleep = sleep(sleep_duration);
                 tokio::select! {
-                    _ = &mut shutdown2 => return checkpointer,
+                    _ = &mut shutdown_checkpointer => return checkpointer,
                     _ = sleep => {},
                 }
 
@@ -358,7 +364,7 @@ where
                 }
             };
             futures::pin_mut!(sleep);
-            match self.handle.block_on(select(shutdown, sleep)) {
+            match self.handle.block_on(select(shutdown_data, sleep)) {
                 Either::Left((_, _)) => {
                     let checkpointer = self
                         .handle
@@ -369,7 +375,7 @@ where
                     }
                     return Ok(Shutdown);
                 }
-                Either::Right((_, future)) => shutdown = future,
+                Either::Right((_, future)) => shutdown_data = future,
             }
             stats.record("sleeping", start.elapsed());
         }
@@ -377,17 +383,18 @@ where
 
     /// the run_batch function reads a batch of files and terminates when all files under given path
     /// this function will not keep watching on file changes or new file added
-    pub fn run_batch<C, S>(
+    pub fn run_batch<C, S1, S2>(
         self,
         mut chans: C,
-        shutdown: S,
+        mut shutdown_data: S1,
+        mut shutdown_checkpointer: S2,
         mut checkpointer: Checkpointer,
     ) -> Result<Shutdown, <C as Sink<Vec<Line>>>::Error>
-        where
-            C: Sink<Vec<Line>> + Unpin,
-            <C as Sink<Vec<Line>>>::Error: std::error::Error,
-            S: Future + Unpin + Send + 'static,
-            <S as Future>::Output: Clone + Send + Sync,
+    where
+        C: Sink<Vec<Line>> + Unpin,
+        <C as Sink<Vec<Line>>>::Error: std::error::Error,
+        S1: Future + Unpin + Send + 'static,
+        S2: Future + Unpin + Send + 'static,
     {
         let mut fingerprint_buffer = Vec::new();
 
@@ -445,8 +452,8 @@ where
         // We have to do a lot of cloning here to convince the compiler that we
         // aren't going to get away with anything, but none of it should have
         // any perf impact.
-        let mut shutdown = shutdown.shared();
-        let mut shutdown2 = shutdown.clone();
+        // let mut shutdown = shutdown.shared();
+        // let mut shutdown2 = shutdown.clone();
         let emitter = self.emitter.clone();
         let checkpointer = Arc::new(checkpointer);
         let checkpointer2 = Arc::clone(&checkpointer);
@@ -456,9 +463,7 @@ where
             loop {
                 let sleep = sleep(sleep_duration);
                 tokio::select! {
-                    _ = &mut shutdown2 => {
-                        return checkpointer;
-                    },
+                    _ = &mut shutdown_checkpointer => return checkpointer,
                     _ = sleep => {},
                 }
                 let received = checkpoint_rx.try_recv();
@@ -687,7 +692,7 @@ where
                 }
             };
             futures::pin_mut!(sleep);
-            match self.handle.block_on(select(shutdown, sleep)) {
+            match self.handle.block_on(select(shutdown_data, sleep)) {
                 Either::Left((_, _)) => {
                     let checkpointer = self
                         .handle
@@ -698,7 +703,7 @@ where
                     }
                     return Ok(Shutdown);
                 }
-                Either::Right((_, future)) => shutdown = future,
+                Either::Right((_, future)) => shutdown_data = future,
             }
             // check if files read done
             let checkpoints_view = checkpointer2.view();
@@ -751,7 +756,7 @@ where
         // checkpoint was only loaded for new files when Vector was started up, but the
         // `kubernetes_logs` source returns the files well after start-up, once it has populated
         // them from the k8s metadata, so we now just always use the checkpoints unless opted out.
-        // https://github.com/timberio/vector/issues/7139
+        // https://github.com/vectordotdev/vector/issues/7139
         let read_from = if !self.ignore_checkpoints {
             checkpoints
                 .get(file_id)

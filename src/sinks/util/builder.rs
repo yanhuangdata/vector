@@ -2,12 +2,15 @@ use std::{fmt, future::Future, hash::Hash, num::NonZeroUsize, pin::Pin, sync::Ar
 
 use futures_util::{stream::Map, Stream, StreamExt};
 use tower::Service;
-use vector_core::stream::DriverResponse;
 use vector_core::{
     buffers::{Ackable, Acker},
     event::{Finalizable, Metric},
     partition::Partitioner,
-    stream::{Batcher, BatcherSettings, ConcurrentMap, Driver, ExpirationQueue},
+    stream::{
+        batcher::{config::BatchConfig, Batcher},
+        BatcherSettings, ConcurrentMap, Driver, DriverResponse, ExpirationQueue,
+        PartitionedBatcher,
+    },
     ByteSizeOf,
 };
 
@@ -23,18 +26,32 @@ pub trait SinkBuilderExt: Stream {
     /// The stream will yield batches of events, with their partition key, when either a batch fills
     /// up or times out. [`Partitioner`] operates on a per-event basis, and has access to the event
     /// itself, and so can access any and all fields of an event.
-    fn batched<P>(
+    fn batched_partitioned<P>(
         self,
         partitioner: P,
         settings: BatcherSettings,
-    ) -> Batcher<Self, P, ExpirationQueue<P::Key>>
+    ) -> PartitionedBatcher<Self, P, ExpirationQueue<P::Key>>
     where
         Self: Stream<Item = P::Item> + Sized,
         P: Partitioner + Unpin,
         P::Key: Eq + Hash + Clone,
         P::Item: ByteSizeOf,
     {
-        Batcher::new(self, partitioner, settings)
+        PartitionedBatcher::new(self, partitioner, settings)
+    }
+
+    /// Batches the stream based on the given batch settings and item size calculator.
+    ///
+    /// The stream will yield batches of events, when either a batch fills
+    /// up or times out. The `item_size_calculator` determines the "size" of each input
+    /// in a batch. The units of "size" are intentionally not defined, so you can choose
+    /// whatever is needed.
+    fn batched<C>(self, config: C) -> Batcher<Self, C>
+    where
+        C: BatchConfig<Self::Item>,
+        Self: Sized,
+    {
+        Batcher::new(self, config)
     }
 
     /// Maps the items in the stream concurrently, up to the configured limit.
@@ -146,12 +163,26 @@ pub trait SinkBuilderExt: Stream {
     /// supported by the sink, or to modify them.  Such modifications typically include converting
     /// absolute metrics to incremental metrics by tracking the change over time for a particular
     /// series, or emitting absolute metrics based on incremental updates.
-    fn normalized<N>(self) -> Normalizer<Self, N>
+    fn normalized<N>(self, normalizer: N) -> Normalizer<Self, N>
     where
         Self: Stream<Item = Metric> + Unpin + Sized,
         N: MetricNormalize,
     {
-        Normalizer::new(self)
+        Normalizer::new(self, normalizer)
+    }
+
+    /// Normalizes a stream of [`Metric`] events with a default normalizer.
+    ///
+    /// An implementation of [`MetricNormalize`] is used to either drop metrics which cannot be
+    /// supported by the sink, or to modify them.  Such modifications typically include converting
+    /// absolute metrics to incremental metrics by tracking the change over time for a particular
+    /// series, or emitting absolute metrics based on incremental updates.
+    fn normalized_with_default<N>(self) -> Normalizer<Self, N>
+    where
+        Self: Stream<Item = Metric> + Unpin + Sized,
+        N: MetricNormalize + Default,
+    {
+        Normalizer::new(self, N::default())
     }
 
     /// Creates a [`Driver`] that uses the configured event stream as the input to the given

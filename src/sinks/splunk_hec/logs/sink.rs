@@ -1,18 +1,18 @@
-use std::{fmt, num::NonZeroUsize};
+use std::{fmt, num::NonZeroUsize, sync::Arc};
 
 use async_trait::async_trait;
-use futures_util::{future, stream::BoxStream, StreamExt};
+use futures_util::{stream::BoxStream, StreamExt};
 use tower::Service;
-use vector_core::stream::DriverResponse;
 use vector_core::{
     config::log_schema,
     event::{Event, LogEvent, Value},
-    partition::NullPartitioner,
+    partition::Partitioner,
     sink::StreamSink,
-    stream::BatcherSettings,
+    stream::{BatcherSettings, DriverResponse},
     ByteSizeOf,
 };
 
+use super::request_builder::HecLogsRequestBuilder;
 use crate::{
     config::SinkContext,
     sinks::{
@@ -21,8 +21,6 @@ use crate::{
     },
     template::Template,
 };
-
-use super::request_builder::HecLogsRequestBuilder;
 
 pub struct HecLogsSink<S> {
     pub context: SinkContext,
@@ -34,6 +32,7 @@ pub struct HecLogsSink<S> {
     pub index: Option<Template>,
     pub indexed_fields: Vec<String>,
     pub host: String,
+    pub timestamp_nanos_key: Option<String>,
 }
 
 impl<S> HecLogsSink<S>
@@ -49,23 +48,22 @@ where
         let index = self.index.as_ref();
         let indexed_fields = self.indexed_fields.as_slice();
         let host = self.host.as_ref();
+        let timestamp_nanos_key = self.timestamp_nanos_key.as_deref();
 
         let builder_limit = NonZeroUsize::new(64);
         let sink = input
-            .map(|event| (event.size_of(), event.into_log()))
-            .filter_map(move |(event_byte_size, log)| {
-                future::ready(process_log(
-                    log,
-                    event_byte_size,
+            .map(move |event| {
+                process_log(
+                    event,
                     sourcetype,
                     source,
                     index,
                     host,
                     indexed_fields,
-                ))
+                    timestamp_nanos_key,
+                )
             })
-            .batched(NullPartitioner::new(), self.batch_settings)
-            .map(|(_, batch)| batch)
+            .batched_partitioned(EventPartitioner::default(), self.batch_settings)
             .request_builder(builder_limit, self.request_builder)
             .filter_map(|request| async move {
                 match request {
@@ -83,7 +81,7 @@ where
 }
 
 #[async_trait]
-impl<S> StreamSink for HecLogsSink<S>
+impl<S> StreamSink<Event> for HecLogsSink<S>
 where
     S: Service<HecRequest> + Send + 'static,
     S::Future: Send + 'static,
@@ -92,6 +90,18 @@ where
 {
     async fn run(self: Box<Self>, input: BoxStream<'_, Event>) -> Result<(), ()> {
         self.run_inner(input).await
+    }
+}
+
+#[derive(Default)]
+struct EventPartitioner;
+
+impl Partitioner for EventPartitioner {
+    type Item = HecProcessedEvent;
+    type Key = Option<Arc<str>>;
+
+    fn partition(&self, item: &Self::Item) -> Self::Key {
+        item.event.metadata().splunk_hec_token().clone()
     }
 }
 
@@ -119,14 +129,17 @@ impl ByteSizeOf for HecLogsProcessedEventMetadata {
 pub type HecProcessedEvent = ProcessedEvent<LogEvent, HecLogsProcessedEventMetadata>;
 
 pub fn process_log(
-    mut log: LogEvent,
-    event_byte_size: usize,
+    event: Event,
     sourcetype: Option<&Template>,
     source: Option<&Template>,
     index: Option<&Template>,
     host_key: &str,
     indexed_fields: &[String],
-) -> Option<HecProcessedEvent> {
+    timestamp_nanos_key: Option<&str>,
+) -> HecProcessedEvent {
+    let event_byte_size = event.size_of();
+    let mut log = event.into_log();
+
     let sourcetype =
         sourcetype.and_then(|sourcetype| render_template_string(sourcetype, &log, "sourcetype"));
 
@@ -140,11 +153,16 @@ pub fn process_log(
         Some(Value::Timestamp(ts)) => ts,
         _ => chrono::Utc::now(),
     };
+
+    if let Some(key) = timestamp_nanos_key {
+        log.try_insert_flat(key, timestamp.timestamp_subsec_nanos() % 1_000_000);
+    }
+
     let timestamp = (timestamp.timestamp_millis() as f64) / 1000f64;
 
     let fields = indexed_fields
         .iter()
-        .filter_map(|field| log.get(field).map(|value| (field, value.clone())))
+        .filter_map(|field| log.get(field.as_str()).map(|value| (field, value.clone())))
         .collect::<LogEvent>();
 
     let metadata = HecLogsProcessedEventMetadata {
@@ -157,8 +175,8 @@ pub fn process_log(
         fields,
     };
 
-    Some(ProcessedEvent {
+    ProcessedEvent {
         event: log,
         metadata,
-    })
+    }
 }

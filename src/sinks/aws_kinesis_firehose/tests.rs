@@ -1,15 +1,20 @@
 #![cfg(test)]
 
 use super::*;
-use crate::aws::RegionOrEndpoint;
-use crate::config::{SinkConfig, SinkContext};
-use crate::sinks::aws_kinesis_firehose::config::{
-    KinesisFirehoseDefaultBatchSettings, MAX_PAYLOAD_EVENTS, MAX_PAYLOAD_SIZE,
+use crate::{
+    aws::RegionOrEndpoint,
+    config::{SinkConfig, SinkContext},
+    sinks::{
+        aws_kinesis_firehose::config::{
+            KinesisFirehoseDefaultBatchSettings, MAX_PAYLOAD_EVENTS, MAX_PAYLOAD_SIZE,
+        },
+        util::{
+            batch::BatchError,
+            encoding::{EncodingConfig, StandardEncodings},
+            BatchConfig, Compression,
+        },
+    },
 };
-use crate::sinks::util::batch::BatchError;
-use crate::sinks::util::encoding::EncodingConfig;
-use crate::sinks::util::encoding::StandardEncodings;
-use crate::sinks::util::{BatchConfig, Compression};
 
 #[test]
 fn generate_config() {
@@ -24,13 +29,14 @@ async fn check_batch_size() {
 
     let config = KinesisFirehoseSinkConfig {
         stream_name: String::from("test"),
-        region: RegionOrEndpoint::with_endpoint("http://localhost:4566"),
-        encoding: EncodingConfig::from(StandardEncodings::Json),
+        region: RegionOrEndpoint::with_both("local", "http://localhost:4566"),
+        encoding: EncodingConfig::from(StandardEncodings::Json).into(),
         compression: Compression::None,
         batch,
         request: Default::default(),
-        assume_role: None,
+        tls: None,
         auth: Default::default(),
+        acknowledgements: Default::default(),
     };
 
     let cx = SinkContext::new_test();
@@ -51,13 +57,14 @@ async fn check_batch_events() {
 
     let config = KinesisFirehoseSinkConfig {
         stream_name: String::from("test"),
-        region: RegionOrEndpoint::with_endpoint("http://localhost:4566"),
-        encoding: EncodingConfig::from(StandardEncodings::Json),
+        region: RegionOrEndpoint::with_both("local", "http://localhost:4566"),
+        encoding: EncodingConfig::from(StandardEncodings::Json).into(),
         compression: Compression::None,
         batch,
         request: Default::default(),
-        assume_role: None,
+        tls: None,
         auth: Default::default(),
+        acknowledgements: Default::default(),
     };
 
     let cx = SinkContext::new_test();

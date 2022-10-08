@@ -1,35 +1,34 @@
-use super::util::finalizer::OrderedFinalizer;
-use super::util::{EncodingConfig, MultilineConfig};
-use crate::{
-    config::{log_schema, DataType, SourceConfig, SourceContext, SourceDescription},
-    encoding_transcode::{Decoder, Encoder},
-    event::{BatchNotifier, Event, LogEvent},
-    internal_events::{
-        FileBytesReceived, FileEventsReceived, FileOpen, FileSourceInternalEventsEmitter,
-    },
-    line_agg::{self, LineAgg},
-    shutdown::ShutdownSignal,
-    trace::{current_span, Instrument},
-    Pipeline,
-};
+use std::{convert::TryInto, path::PathBuf, time::Duration};
+
 use bytes::Bytes;
 use chrono::Utc;
 use file_source::{
     paths_provider::glob::{Glob, MatchOptions},
     Checkpointer, FileFingerprint, FileServer, FingerprintStrategy, Fingerprinter, Line, ReadFrom,
 };
-use futures::{
-    future::TryFutureExt,
-    stream::{Stream, StreamExt},
-    FutureExt, SinkExt,
-};
+use futures::{FutureExt, Stream, StreamExt, TryFutureExt};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use snafu::{ResultExt, Snafu};
-use std::convert::TryInto;
-use std::path::PathBuf;
-use std::time::Duration;
-use tokio::task::spawn_blocking;
+use tokio::{sync::oneshot, task::spawn_blocking};
+use tracing::{Instrument, Span};
+
+use super::util::{finalizer::OrderedFinalizer, EncodingConfig, MultilineConfig};
+use crate::{
+    config::{
+        log_schema, AcknowledgementsConfig, DataType, Output, SourceConfig, SourceContext,
+        SourceDescription,
+    },
+    encoding_transcode::{Decoder, Encoder},
+    event::{BatchNotifier, BatchStatus, LogEvent},
+    internal_events::{
+        FileBytesReceived, FileEventsReceived, FileOpen, FileSourceInternalEventsEmitter,
+    },
+    line_agg::{self, LineAgg},
+    serde::bool_or_struct,
+    shutdown::ShutdownSignal,
+    SourceSender,
+};
 
 #[derive(Debug, Snafu)]
 enum BuildError {
@@ -91,6 +90,8 @@ pub struct FileConfig {
     pub remove_after_secs: Option<u64>,
     pub line_delimiter: String,
     pub encoding: Option<EncodingConfig>,
+    #[serde(default, deserialize_with = "bool_or_struct")]
+    pub acknowledgements: AcknowledgementsConfig,
     pub keep_watching: bool,
 }
 
@@ -193,6 +194,7 @@ impl Default for FileConfig {
             remove_after_secs: None,
             line_delimiter: "\n".to_string(),
             encoding: None,
+            acknowledgements: Default::default(),
             keep_watching: true,
         }
     }
@@ -226,25 +228,31 @@ impl SourceConfig for FileConfig {
 
             if let Some(ref indicator) = self.message_start_indicator {
                 Regex::new(indicator)
-                    .with_context(|| InvalidMessageStartIndicator { indicator })?;
+                    .with_context(|_| InvalidMessageStartIndicatorSnafu { indicator })?;
             }
         }
+
+        let acknowledgements = cx.do_acknowledgements(&self.acknowledgements);
 
         Ok(file_source(
             self,
             data_dir,
             cx.shutdown,
             cx.out,
-            cx.acknowledgements.enabled,
+            acknowledgements,
         ))
     }
 
-    fn output_type(&self) -> DataType {
-        DataType::Log
+    fn outputs(&self) -> Vec<Output> {
+        vec![Output::default(DataType::Log)]
     }
 
     fn source_type(&self) -> &'static str {
         "file"
+    }
+
+    fn can_acknowledge(&self) -> bool {
+        true
     }
 }
 
@@ -252,7 +260,7 @@ pub fn file_source(
     config: &FileConfig,
     data_dir: PathBuf,
     shutdown: ShutdownSignal,
-    mut out: Pipeline,
+    mut out: SourceSender,
     acknowledgements: bool,
 ) -> super::Source {
     let ignore_before = config
@@ -316,20 +324,39 @@ pub fn file_source(
     let multiline_config = config.multiline.clone();
     let message_start_indicator = config.message_start_indicator.clone();
     let multi_line_timeout = config.multi_line_timeout;
-    let checkpoints = checkpointer.view();
-    let shutdown = shutdown.shared();
-    let finalizer = acknowledgements.then(|| {
-        let checkpoints = checkpointer.view();
-        OrderedFinalizer::new(shutdown.clone(), move |entry: FinalizerEntry| {
-            checkpoints.update(entry.file_id, entry.offset)
-        })
-    });
-    let keep_watching = config.keep_watching;
 
+    let (finalizer, shutdown_checkpointer) = if acknowledgements {
+        // The shutdown sent in to the finalizer is the global
+        // shutdown handle used to tell it to stop accepting new batch
+        // statuses and just wait for the remaining acks to come in.
+        let (finalizer, mut ack_stream) = OrderedFinalizer::<FinalizerEntry>::new(shutdown.clone());
+        // We set up a separate shutdown signal to tie together the
+        // finalizer and the checkpoint writer task in the file
+        // server, to make it continue to write out updated
+        // checkpoints until all the acks have come in.
+        let (send_shutdown, shutdown2) = oneshot::channel::<()>();
+        let checkpoints = checkpointer.view();
+        tokio::spawn(async move {
+            while let Some((status, entry)) = ack_stream.next().await {
+                if status == BatchStatus::Delivered {
+                    checkpoints.update(entry.file_id, entry.offset);
+                }
+            }
+            send_shutdown.send(())
+        });
+        (Some(finalizer), shutdown2.map(|_| ()).boxed())
+    } else {
+        // When not dealing with end-to-end acknowledgements, just
+        // clone the global shutdown to stop the checkpoint writer.
+        (None, shutdown.clone().map(|_| ()).boxed())
+    };
+
+    let keep_watching = config.keep_watching;
+    let checkpoints = checkpointer.view();
     Box::pin(async move {
         info!(message = "Starting file server.", include = ?include, exclude = ?exclude);
 
-        let mut encoding_decoder = encoding_charset.map(|e| Decoder::new(e));
+        let mut encoding_decoder = encoding_charset.map(Decoder::new);
 
         // sizing here is just a guess
         let (tx, rx) = futures::channel::mpsc::channel::<Vec<Line>>(2);
@@ -337,7 +364,7 @@ pub fn file_source(
             .map(futures::stream::iter)
             .flatten()
             .map(move |mut line| {
-                emit!(&FileBytesReceived {
+                emit!(FileBytesReceived {
                     byte_size: line.text.len(),
                     file: &line.filename,
                 });
@@ -369,39 +396,40 @@ pub fn file_source(
 
         // Once file server ends this will run until it has finished processing remaining
         // logs in the queue.
-        let span = current_span();
+        let span = Span::current();
         let span2 = span.clone();
-        let mut messages = messages
-            .map(move |line| {
-                let _enter = span2.enter();
-                let mut event =
-                    create_event(line.text, line.filename, &host_key, &hostname, &file_key);
-                if let Some(finalizer) = &finalizer {
-                    let (batch, receiver) = BatchNotifier::new_with_receiver();
-                    event = event.with_batch_notifier(&batch);
-                    let entry = FinalizerEntry {
-                        file_id: line.file_id,
-                        offset: line.offset,
-                    };
-                    finalizer.add(entry, receiver);
-                } else {
-                    checkpoints.update(line.file_id, line.offset);
-                }
-                event
-            })
-            .map(Ok);
-        tokio::spawn(async move { out.send_all(&mut messages).instrument(span).await });
+        let mut messages = messages.map(move |line| {
+            let _enter = span2.enter();
+            let mut event = create_event(line.text, line.filename, &host_key, &hostname, &file_key);
+            if let Some(finalizer) = &finalizer {
+                let (batch, receiver) = BatchNotifier::new_with_receiver();
+                event = event.with_batch_notifier(&batch);
+                let entry = FinalizerEntry {
+                    file_id: line.file_id,
+                    offset: line.offset,
+                };
+                finalizer.add(entry, receiver);
+            } else {
+                checkpoints.update(line.file_id, line.offset);
+            }
+            event
+        });
+        tokio::spawn(async move {
+            out.send_event_stream(&mut messages)
+                .instrument(span.or_current())
+                .await
+        });
 
         let span = info_span!("file_server");
         spawn_blocking(move || {
             let _enter = span.enter();
             let result = if keep_watching {
-                file_server.run(tx, shutdown, checkpointer)
+                file_server.run(tx, shutdown, shutdown_checkpointer, checkpointer)
             } else {
-                file_server.run_batch(tx, shutdown, checkpointer)
+                file_server.run_batch(tx, shutdown, shutdown_checkpointer, checkpointer)
             };
             println!("file_server run returned");
-            emit!(&FileOpen { count: 0 });
+            emit!(FileOpen { count: 0 });
             // Panic if we encounter any error originating from the file server.
             // We're at the `spawn_blocking` call, the panic will be caught and
             // passed to the `JoinHandle` error, similar to the usual threads.
@@ -460,8 +488,8 @@ fn create_event(
     host_key: &str,
     hostname: &Option<String>,
     file_key: &Option<String>,
-) -> Event {
-    emit!(&FileEventsReceived {
+) -> LogEvent {
+    emit!(FileEventsReceived {
         count: 1,
         file: &file,
         byte_size: line.len(),
@@ -473,36 +501,38 @@ fn create_event(
     event.insert(log_schema().source_type_key(), Bytes::from("file"));
 
     if let Some(file_key) = &file_key {
-        event.insert(file_key.clone(), file);
+        event.insert(file_key.as_str(), file);
     }
 
     if let Some(hostname) = &hostname {
         event.insert(host_key, hostname.clone());
     }
 
-    event.into()
+    event
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::{
-        config::Config,
-        event::{EventStatus, Value},
-        shutdown::ShutdownSignal,
-        sources::file,
-        test_util::components::{self, SOURCE_TESTS},
-    };
-    use encoding_rs::UTF_16LE;
-    use pretty_assertions::assert_eq;
     use std::{
         collections::HashSet,
         fs::{self, File},
         future::Future,
         io::{Seek, Write},
     };
+
+    use encoding_rs::UTF_16LE;
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
     use tokio::time::{sleep, timeout, Duration};
+
+    use super::*;
+    use crate::{
+        config::Config,
+        event::{Event, EventStatus, Value},
+        shutdown::ShutdownSignal,
+        sources::file,
+        test_util::components::{assert_source_compliance, FILE_SOURCE_TAGS},
+    };
 
     #[test]
     fn generate_config() {
@@ -520,18 +550,6 @@ mod tests {
             glob_minimum_cooldown_ms: 100, // millis
             ..Default::default()
         }
-    }
-
-    async fn wait_with_timeout<F, R>(future: F) -> R
-    where
-        F: Future<Output = R> + Send,
-        R: Send,
-    {
-        timeout(Duration::from_secs(5), future)
-            .await
-            .unwrap_or_else(|_| {
-                panic!("Unclosed channel: may indicate file-server could not shutdown gracefully.")
-            })
     }
 
     async fn sleep_500_millis() {
@@ -636,8 +654,7 @@ mod tests {
         let hostname = Some("Some.Machine".to_string());
         let file_key = Some("file".to_string());
 
-        let event = create_event(line, file, &host_key, &hostname, &file_key);
-        let log = event.into_log();
+        let log = create_event(line, file, &host_key, &hostname, &file_key);
 
         assert_eq!(log["file"], "some_file.rs".into());
         assert_eq!(log["host"], "Some.Machine".into());
@@ -698,7 +715,7 @@ mod tests {
         assert_eq!(goodbye_i, n);
     }
 
-    // https://github.com/timberio/vector/issues/8363
+    // https://github.com/vectordotdev/vector/issues/8363
     #[tokio::test]
     async fn file_read_empty_lines() {
         let n = 5;
@@ -1149,8 +1166,10 @@ mod tests {
     #[cfg(unix)] // this test uses unix-specific function `futimes` during test time
     #[tokio::test]
     async fn file_start_position_ignore_old_files() {
-        use std::os::unix::io::AsRawFd;
-        use std::time::{Duration, SystemTime};
+        use std::{
+            os::unix::io::AsRawFd,
+            time::{Duration, SystemTime},
+        };
 
         let dir = tempdir().unwrap();
         let config = file::FileConfig {
@@ -1464,7 +1483,7 @@ mod tests {
         );
     }
 
-    // Ignoring on mac: https://github.com/timberio/vector/issues/8373
+    // Ignoring on mac: https://github.com/vectordotdev/vector/issues/8373
     #[cfg(not(target_os = "macos"))]
     #[tokio::test]
     async fn test_split_reads() {
@@ -1656,32 +1675,43 @@ mod tests {
         acking_mode: AckingMode,
         inner: impl Future<Output = ()>,
     ) -> Vec<Event> {
-        components::init_test();
+        assert_source_compliance(&FILE_SOURCE_TAGS, async move {
+            let (tx, rx) = if acking_mode == Acks {
+                let (tx, rx) = SourceSender::new_test_finalize(EventStatus::Delivered);
+                (tx, rx.boxed())
+            } else {
+                let (tx, rx) = SourceSender::new_test();
+                (tx, rx.boxed())
+            };
 
-        let (tx, rx) = if acking_mode == Acks {
-            let (tx, rx) = Pipeline::new_test_finalize(EventStatus::Delivered);
-            (tx, rx.boxed())
-        } else {
-            let (tx, rx) = Pipeline::new_test();
-            (tx, rx.boxed())
-        };
+            let (trigger_shutdown, shutdown, shutdown_done) = ShutdownSignal::new_wired();
+            let data_dir = config.data_dir.clone().unwrap();
+            let acks = !matches!(acking_mode, NoAcks);
 
-        let (trigger_shutdown, shutdown, shutdown_done) = ShutdownSignal::new_wired();
-        let data_dir = config.data_dir.clone().unwrap();
-        let acks = !matches!(acking_mode, NoAcks);
+            tokio::spawn(file::file_source(config, data_dir, shutdown, tx, acks));
 
-        tokio::spawn(file::file_source(config, data_dir, shutdown, tx, acks));
+            inner.await;
 
-        inner.await;
+            drop(trigger_shutdown);
 
-        drop(trigger_shutdown);
+            let result = if acking_mode == Unfinalized {
+                rx.take_until(tokio::time::sleep(Duration::from_secs(5)))
+                    .collect::<Vec<_>>()
+                    .await
+            } else {
+                timeout(Duration::from_secs(5), rx.collect::<Vec<_>>())
+                    .await
+                    .expect(
+                        "Unclosed channel: may indicate file-server could not shutdown gracefully.",
+                    )
+            };
+            if wait_shutdown {
+                shutdown_done.await;
+            }
 
-        let result = wait_with_timeout(rx.collect::<Vec<_>>()).await;
-        if wait_shutdown {
-            shutdown_done.await;
-        }
-        SOURCE_TESTS.assert(&["file"]);
-        result
+            result
+        })
+        .await
     }
 
     fn extract_messages_string(received: Vec<Event>) -> Vec<String> {

@@ -1,20 +1,23 @@
+use std::{convert::TryFrom, sync::Arc};
+
+use futures::{future::ready, stream};
+use serde_json::Value as JsonValue;
+use vector_common::btreemap;
+use vector_core::event::{BatchNotifier, BatchStatus, Event, MetricValue};
+
 use super::config::HecMetricsSinkConfig;
-use crate::template::Template;
 use crate::{
     config::{SinkConfig, SinkContext},
     event::{Metric, MetricKind},
     sinks::{
-        splunk_hec::common::integration_test_helpers::get_token,
+        splunk_hec::common::integration_test_helpers::{
+            get_token, splunk_api_address, splunk_hec_address,
+        },
         util::{BatchConfig, Compression, TowerRequestConfig},
     },
-    test_util::components::{self, HTTP_SINK_TAGS},
+    template::Template,
+    test_util::components::{run_and_assert_sink_compliance, HTTP_SINK_TAGS},
 };
-use futures_util::stream;
-use serde_json::Value as JsonValue;
-use shared::btreemap;
-use std::convert::TryFrom;
-use std::sync::Arc;
-use vector_core::event::{BatchNotifier, BatchStatus, Event, MetricValue};
 
 const USERNAME: &str = "admin";
 const PASSWORD: &str = "password";
@@ -25,8 +28,8 @@ async fn config() -> HecMetricsSinkConfig {
 
     HecMetricsSinkConfig {
         default_namespace: None,
-        token: get_token().await,
-        endpoint: "http://localhost:8088/".into(),
+        default_token: get_token().await,
+        endpoint: splunk_hec_address(),
         host_key: "host".into(),
         index: None,
         sourcetype: None,
@@ -35,6 +38,7 @@ async fn config() -> HecMetricsSinkConfig {
         batch,
         request: TowerRequestConfig::default(),
         tls: None,
+        acknowledgements: Default::default(),
     }
 }
 
@@ -75,7 +79,7 @@ async fn splunk_insert_counter_metric() {
     let (batch, mut receiver) = BatchNotifier::new_with_receiver();
     let event = get_counter(Arc::clone(&batch));
     drop(batch);
-    components::run_sink_event(sink, event, &HTTP_SINK_TAGS).await;
+    run_and_assert_sink_compliance(sink, stream::once(ready(event)), &HTTP_SINK_TAGS).await;
     assert_eq!(receiver.try_recv(), Ok(BatchStatus::Delivered));
 
     assert!(
@@ -98,7 +102,7 @@ async fn splunk_insert_gauge_metric() {
     let (batch, mut receiver) = BatchNotifier::new_with_receiver();
     let event = get_gauge(Arc::clone(&batch));
     drop(batch);
-    components::run_sink_event(sink, event, &HTTP_SINK_TAGS).await;
+    run_and_assert_sink_compliance(sink, stream::once(ready(event)), &HTTP_SINK_TAGS).await;
     assert_eq!(receiver.try_recv(), Ok(BatchStatus::Delivered));
 
     assert!(
@@ -124,7 +128,8 @@ async fn splunk_insert_multiple_counter_metrics() {
         events.push(get_counter(Arc::clone(&batch)))
     }
     drop(batch);
-    components::run_sink(sink, stream::iter(events), &HTTP_SINK_TAGS).await;
+
+    run_and_assert_sink_compliance(sink, stream::iter(events), &HTTP_SINK_TAGS).await;
     assert_eq!(receiver.try_recv(), Ok(BatchStatus::Delivered));
 
     assert!(
@@ -150,7 +155,8 @@ async fn splunk_insert_multiple_gauge_metrics() {
         events.push(get_gauge(Arc::clone(&batch)))
     }
     drop(batch);
-    components::run_sink(sink, stream::iter(events), &HTTP_SINK_TAGS).await;
+
+    run_and_assert_sink_compliance(sink, stream::iter(events), &HTTP_SINK_TAGS).await;
     assert_eq!(receiver.try_recv(), Ok(BatchStatus::Delivered));
 
     assert!(
@@ -196,9 +202,11 @@ async fn metric_dimensions(metric_name: &str) -> Vec<JsonValue> {
 
     let res = client
         .get(format!(
-            "https://localhost:8089/services/catalog/metricstore/dimensions?output_mode=json&metric_name={}",
+            "{}/services/catalog/metricstore/dimensions?output_mode=json&metric_name={}",
+            splunk_api_address(),
             metric_name
         ))
+        .form(&vec![("filter", "index=*")])
         .basic_auth(USERNAME, Some(PASSWORD))
         .send()
         .await

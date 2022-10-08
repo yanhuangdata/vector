@@ -1,9 +1,14 @@
-use crate::sinks::util::encoding::Encoder;
+use std::{collections::HashMap, io};
+
+use bytes::Bytes;
 use serde::{ser::SerializeSeq, Serialize};
-use std::collections::HashMap;
-use std::io;
-use vector_core::event::{EventFinalizers, Finalizable};
-use vector_core::ByteSizeOf;
+use vector_buffers::EventCount;
+use vector_core::{
+    event::{EventFinalizers, Finalizable},
+    ByteSizeOf,
+};
+
+use crate::sinks::util::encoding::Encoder;
 
 pub type Labels = Vec<(String, String)>;
 
@@ -19,7 +24,7 @@ impl Encoder<Vec<LokiRecord>> for LokiBatchEncoder {
         let batch = LokiBatch::from(input);
         let body = serde_json::json!({ "streams": [batch] });
         let body = serde_json::to_vec(&body)?;
-        writer.write(&body)
+        writer.write_all(&body).map(|()| body.len())
     }
 }
 
@@ -49,7 +54,7 @@ impl From<Vec<LokiRecord>> for LokiBatch {
 #[derive(Clone, Debug)]
 pub struct LokiEvent {
     pub timestamp: i64,
-    pub event: String,
+    pub event: Bytes,
 }
 
 impl ByteSizeOf for LokiEvent {
@@ -65,7 +70,8 @@ impl Serialize for LokiEvent {
     {
         let mut seq = serializer.serialize_seq(Some(2))?;
         seq.serialize_element(&self.timestamp.to_string())?;
-        seq.serialize_element(&self.event)?;
+        let event = String::from_utf8_lossy(&self.event);
+        seq.serialize_element(&event)?;
         seq.end()
     }
 }
@@ -85,6 +91,13 @@ impl ByteSizeOf for LokiRecord {
                 res + item.0.allocated_bytes() + item.1.allocated_bytes()
             })
             + self.event.allocated_bytes()
+    }
+}
+
+impl EventCount for LokiRecord {
+    fn event_count(&self) -> usize {
+        // A Loki record is mapped one-to-one with an event.
+        1
     }
 }
 

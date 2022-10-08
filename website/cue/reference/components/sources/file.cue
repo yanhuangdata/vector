@@ -15,6 +15,7 @@ components: sources: file: {
 	}
 
 	features: {
+		acknowledgements: true
 		collect: {
 			checkpoint: enabled: true
 			from: {
@@ -47,7 +48,7 @@ components: sources: file: {
 	}
 
 	configuration: {
-		acknowledgements: configuration._acknowledgements
+		acknowledgements: configuration._source_acknowledgements
 		exclude: {
 			common:      false
 			description: "Array of file patterns to exclude. [Globbing](#globbing) is supported.*Takes precedence over the [`include` option](#include).*"
@@ -184,7 +185,7 @@ components: sources: file: {
 			description: "An approximate limit on the amount of data read from a single file at a given time."
 			required:    false
 			type: uint: {
-				default: null
+				default: 2048
 				examples: [2048]
 				unit: "bytes"
 			}

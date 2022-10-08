@@ -1,18 +1,20 @@
-use crate::sinks::util::partitioner::KeyPartitioner;
-use crate::{
-    config::SinkContext,
-    event::Event,
-    sinks::util::{RequestBuilder, SinkBuilderExt},
-};
+use std::{fmt, num::NonZeroUsize};
+
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use futures_util::StreamExt;
-use std::{fmt, num::NonZeroUsize};
 use tower::Service;
-use vector_core::buffers::Acker;
-use vector_core::stream::DriverResponse;
 use vector_core::{
-    buffers::Ackable, event::Finalizable, sink::StreamSink, stream::BatcherSettings,
+    buffers::{Ackable, Acker},
+    event::Finalizable,
+    sink::StreamSink,
+    stream::{BatcherSettings, DriverResponse},
+};
+
+use crate::{
+    config::SinkContext,
+    event::Event,
+    sinks::util::{partitioner::KeyPartitioner, RequestBuilder, SinkBuilderExt},
 };
 
 pub struct S3Sink<Svc, RB> {
@@ -59,7 +61,7 @@ where
         let request_builder = self.request_builder;
 
         let sink = input
-            .batched(partitioner, settings)
+            .batched_partitioned(partitioner, settings)
             .filter_map(|(key, batch)| async move { key.map(move |k| (k, batch)) })
             .request_builder(builder_limit, request_builder)
             .filter_map(|request| async move {
@@ -78,7 +80,7 @@ where
 }
 
 #[async_trait]
-impl<Svc, RB> StreamSink for S3Sink<Svc, RB>
+impl<Svc, RB> StreamSink<Event> for S3Sink<Svc, RB>
 where
     Svc: Service<RB::Request> + Send + 'static,
     Svc::Future: Send + 'static,

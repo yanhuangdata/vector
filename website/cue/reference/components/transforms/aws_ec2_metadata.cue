@@ -35,7 +35,11 @@ components: transforms: aws_ec2_metadata: {
 				""",
 		]
 		notices: []
-		warnings: []
+		warnings: [
+			"""
+				Do not enable this transform if you are running Vector as an Aggregator, tags will be sourced from the Aggregator node's metadata server and not the client's.
+				""",
+		]
 	}
 
 	configuration: {
@@ -98,11 +102,21 @@ components: transforms: aws_ec2_metadata: {
 			set:          true
 			summary:      true
 		}
+		traces: false
 	}
 
 	output: logs: log: {
 		description: "Log event enriched with EC2 metadata"
 		fields: {
+			"account-id": {
+				description: "The `account-id` that launched the EC2 instance."
+				required:    false
+				common:      true
+				type: string: {
+					default: null
+					examples: ["123456789"]
+				}
+			}
 			"ami-id": {
 				description: "The `ami-id` that the current EC2 instance is using."
 				required:    true
