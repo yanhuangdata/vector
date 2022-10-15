@@ -598,6 +598,7 @@ custom-sinks-logs = [
   "sinks-influxdb",
   "sinks-kafka",
   "sinks-loki",
+  "sinks-memory_queue",
   "sinks-nats",
   "sinks-pulsar",
   "sinks-redis",
@@ -707,6 +708,7 @@ sinks-statsd = ["sinks-utils-udp", "tokio-util/net"]
 sinks-utils-udp = []
 sinks-vector = ["sinks-utils-udp", "dep:tonic", "protobuf-build"]
 sinks-websocket = ["dep:tokio-tungstenite"]
+sinks-memory_queue = []
 
 # Datadog integration
 enterprise = [
