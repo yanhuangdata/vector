@@ -94,6 +94,8 @@ pub mod statsd;
 pub mod vector;
 #[cfg(feature = "sinks-websocket")]
 pub mod websocket;
+#[cfg(feature = "sinks-memory_queue")]
+pub mod memory_queue;
 
 use vector_config::{configurable_component, NamedComponent};
 pub use vector_core::{config::Input, sink::VectorSink};
