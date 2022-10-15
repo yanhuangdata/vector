@@ -287,7 +287,7 @@ postgres-openssl = { version = "0.5.0", default-features = false, features = ["r
 pulsar = { version = "4.1.3", default-features = false, features = ["tokio-runtime", "auth-oauth2"], optional = true }
 rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 rand_distr = { version = "0.4.3", default-features = false }
-rdkafka = { version = "0.28.0", default-features = false, features = ["tokio", "libz", "ssl", "zstd"], optional = true }
+rdkafka = { version = "0.28.0", default-features = false, features = ["tokio", "libz", "ssl", "zstd", "dynamic-linking"], optional = true }
 redis = { version = "0.21.6", default-features = false, features = ["connection-manager", "tokio-comp", "tokio-native-tls-comp"], optional = true }
 regex = { version = "1.6.0", default-features = false, features = ["std", "perf"] }
 roaring = { version = "0.10.1", default-features = false, optional = true }
@@ -455,7 +455,7 @@ sources-logs = [
   "sources-aws_kinesis_firehose",
   "sources-aws_s3",
   "sources-aws_sqs",
-  "sources-datadog_agent",
+  #"sources-datadog_agent",
   "sources-demo_logs",
   "sources-docker_logs",
   "sources-exec",
@@ -483,10 +483,10 @@ sources-logs = [
 sources-metrics = [
   "sources-apache_metrics",
   "sources-aws_ecs_metrics",
-  "sources-eventstoredb_metrics",
+  #"sources-eventstoredb_metrics",
   "sources-host_metrics",
   "sources-internal_metrics",
-  "sources-mongodb_metrics",
+  #"sources-mongodb_metrics",
   "sources-nginx_metrics",
   "sources-postgresql_metrics",
   "sources-prometheus",
@@ -586,7 +586,27 @@ transforms-tag_cardinality_limit = ["dep:bloom"]
 transforms-throttle = ["dep:governor"]
 
 # Sinks
-sinks = ["sinks-logs", "sinks-metrics"]
+#sinks = ["sinks-logs", "sinks-metrics"]
+sinks = ["custom-sinks-logs"]
+custom-sinks-logs = [
+  "sinks-blackhole",
+  "sinks-clickhouse",
+  "sinks-console",
+  "sinks-elasticsearch",
+  "sinks-file",
+  "sinks-http",
+  "sinks-influxdb",
+  "sinks-kafka",
+  "sinks-loki",
+  "sinks-nats",
+  "sinks-pulsar",
+  "sinks-redis",
+  "sinks-socket",
+  "sinks-splunk_hec",
+  "sinks-vector",
+  "sinks-websocket",
+]
+
 sinks-logs = [
   "sinks-amqp",
   "sinks-apex",
