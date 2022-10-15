@@ -72,6 +72,13 @@ pub fn init_log_schema(config_paths: &[ConfigPath], deny_if_set: bool) -> Result
     )
 }
 
+pub fn init_log_schema_from_builder(builder: ConfigBuilder, deny_if_set: bool) -> Result<(), Vec<String>> {
+    vector_core::config::init_log_schema(
+       || { Ok(builder.global.log_schema)},
+        deny_if_set,
+    )
+}
+
 #[derive(Debug, Clone, Ord, PartialOrd, Eq, PartialEq)]
 pub enum ConfigPath {
     File(PathBuf, FormatHint),
