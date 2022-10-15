@@ -65,6 +65,8 @@ pub mod kafka;
 pub mod logdna;
 #[cfg(feature = "sinks-loki")]
 pub mod loki;
+#[cfg(feature = "sinks-memory_queue")]
+pub mod memory_queue;
 #[cfg(feature = "sinks-nats")]
 pub mod nats;
 #[cfg(feature = "sinks-new_relic")]
@@ -272,6 +274,10 @@ pub enum Sinks {
     #[cfg(feature = "sinks-loki")]
     Loki(#[configurable(derived)] loki::LokiConfig),
 
+    /// Memory queue.
+    #[cfg(feature = "sinks-memory_queue")]
+    MemoryQueue(#[configurable(derived)] memory_queue::MemoryQueueConfig),
+
     /// NATS.
     #[cfg(feature = "sinks-nats")]
     Nats(#[configurable(derived)] self::nats::NatsSinkConfig),
@@ -438,6 +444,8 @@ impl NamedComponent for Sinks {
             Self::Logdna(config) => config.get_component_name(),
             #[cfg(feature = "sinks-loki")]
             Self::Loki(config) => config.get_component_name(),
+            #[cfg(feature = "sinks-memory_queue")]
+            Self::MemoryQueue(config) => config.get_component_name(),
             #[cfg(feature = "sinks-nats")]
             Self::Nats(config) => config.get_component_name(),
             #[cfg(feature = "sinks-new_relic")]
