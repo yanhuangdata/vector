@@ -1,6 +1,7 @@
 use futures::{future, FutureExt};
 use vector_config::configurable_component;
 
+
 use crate::{
     config::{AcknowledgementsConfig, GenerateConfig, Input, SinkConfig, SinkContext, SinkDescription},
     sinks::{memory_queue::sink::MemoryQueueSink, Healthcheck, VectorSink},
@@ -24,6 +25,9 @@ pub struct MemoryQueueConfig {
         skip_serializing_if = "crate::serde::skip_serializing_if_default"
     )]
     pub acknowledgements: AcknowledgementsConfig,
+
+    /// the size of the message queue
+    pub queue_size: Option<usize>,
 }
 
 inventory::submit! {
@@ -39,6 +43,7 @@ impl GenerateConfig for MemoryQueueConfig {
 #[async_trait::async_trait]
 impl SinkConfig for MemoryQueueConfig {
     async fn build(&self, _cx: SinkContext) -> crate::Result<(VectorSink, Healthcheck)> {
+
         let sink = MemoryQueueSink::new(self.clone());
         let healthcheck = future::ok(()).boxed();
 
@@ -53,5 +58,3 @@ impl SinkConfig for MemoryQueueConfig {
         &self.acknowledgements
     }
 }
-
-

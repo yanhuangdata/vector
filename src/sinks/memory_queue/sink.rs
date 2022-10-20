@@ -15,7 +15,6 @@ use tokio::{
 use vector_core::event::{EventArray, EventContainer};
 
 use crate::{
-    topology::{GLOBAL_VEC_TX},
     sinks::{memory_queue::MemoryQueueConfig, util::StreamSink},
 };
 
@@ -24,16 +23,48 @@ pub struct MemoryQueueSink {
     total_raw_bytes: Arc<AtomicUsize>,
     config: MemoryQueueConfig,
     last: Option<Instant>,
+    message_sender: futures::channel::mpsc::Sender<EventArray>,
 }
 
+static mut MESSAGE_RECEIVER: Option<futures::channel::mpsc::Receiver<EventArray>> = None;
+static mut MESSAGE_SENDER: Option<futures::channel::mpsc::Sender<EventArray>> = None;
 
 impl MemoryQueueSink {
     pub fn new(config: MemoryQueueConfig) -> Self {
+        unsafe {
+            if MESSAGE_SENDER.is_none() {
+                let (sender, receiver) = futures::channel::mpsc::channel(
+                    config.queue_size.unwrap_or(1000));
+                MESSAGE_SENDER = Some(sender);
+                MESSAGE_RECEIVER = Some(receiver);
+            }
+        }
+        let message_sender = unsafe { MESSAGE_SENDER.clone().unwrap() };
+
         MemoryQueueSink {
             config,
+            message_sender: message_sender,
             total_events: Arc::new(AtomicUsize::new(0)),
             total_raw_bytes: Arc::new(AtomicUsize::new(0)),
             last: None,
+        }
+    }
+
+    // only one receiver is allowed, and calling this function will move the receiver
+    pub fn take_message_receiver() -> Option<futures::channel::mpsc::Receiver<EventArray>> {
+        unsafe {
+            if MESSAGE_RECEIVER.is_some() {
+                let receiver = std::mem::replace(&mut MESSAGE_RECEIVER, None);
+                receiver
+            } else {
+                None
+            }
+        }
+    }
+
+    pub fn set_message_receiver(receiver: futures::channel::mpsc::Receiver<EventArray>) {
+        unsafe {
+            MESSAGE_RECEIVER = Some(receiver);
         }
     }
 }
@@ -54,23 +85,19 @@ impl StreamSink<EventArray> for MemoryQueueSink {
                 self.last = Some(until);
             }
 
-            unsafe {
-                if let Some(sender) = &mut GLOBAL_VEC_TX {
-                    // sender.try_send(events.clone());
-                    // we use a MPSC channel here, and set the buffer size to a limited count, which make sender
-                    // only outpaces receiver by the limited count. When sender is full, we sleep and retry, and
-                    // do not ack the source, to make source buffered on disk if source producing is too fast.
-                    while let Err(send_err) = sender.try_send(events.clone()) {
-                        if send_err.is_full() {
-                            // queue is full, waiting
-                            let sleep_time = std::time::Duration::from_millis(100);
-                            std::thread::sleep(sleep_time);
-                        } else if send_err.is_disconnected() {
-                            error!("failed to send events to memory queue due to disconnected error");
-                        } else {
-                            break;
-                        }
-                    }
+            // sender.try_send(events.clone());
+            // we use a MPSC channel here, and set the buffer size to a limited count, which make sender
+            // only outpaces receiver by the limited count. When sender is full, we sleep and retry, and
+            // do not ack the source, to make source buffered on disk if source producing is too fast.
+            while let Err(send_err) = self.message_sender.try_send(events.clone()) {
+                if send_err.is_full() {
+                    // queue is full, waiting
+                    let sleep_time = std::time::Duration::from_millis(100);
+                    std::thread::sleep(sleep_time);
+                } else if send_err.is_disconnected() {
+                    error!("failed to send events to memory queue due to disconnected error");
+                } else {
+                    break;
                 }
             }
 
