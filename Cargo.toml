@@ -382,7 +382,7 @@ default-musl = ["api", "api-client", "enrichment-tables", "rdkafka?/cmake_build"
 default-no-api-client = ["api", "enrichment-tables", "sinks", "sources", "sources-dnstap", "transforms", "unix", "rdkafka?/gssapi-vendored", "vrl-cli", "enterprise"]
 default-no-vrl-cli = ["api", "sinks", "sources", "sources-dnstap", "transforms", "unix", "rdkafka?/gssapi-vendored", "enterprise"]
 tokio-console = ["dep:console-subscriber", "tokio/tracing"]
-
+custom-sasl = ["rdkafka?/gssapi-vendored"]
 all-logs = ["sinks-logs", "sources-logs", "sources-dnstap", "transforms-logs"]
 all-metrics = ["sinks-metrics", "sources-metrics", "transforms-metrics", "enterprise"]
 
@@ -449,7 +449,18 @@ enrichment-tables = ["enrichment-tables-geoip"]
 enrichment-tables-geoip = ["dep:maxminddb"]
 
 # Sources
-sources = ["sources-logs", "sources-metrics"]
+# sources = ["sources-logs", "sources-metrics"]
+sources = ["custom-sources-logs"]
+
+custom-sources-logs = [
+  "sources-file",
+  "sources-demo_logs",
+  "sources-stdin",
+  "sources-http",
+  "sources-kafka",
+  "sources-vector"
+]
+
 sources-logs = [
   "sources-amqp",
   "sources-aws_kinesis_firehose",
