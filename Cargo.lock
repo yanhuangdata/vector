@@ -4166,6 +4166,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33a33a362ce288760ec6a508b94caaec573ae7d3bbbd91b87aa0bad4456839db"
 
 [[package]]
+name = "libmimalloc-sys"
+version = "0.1.26"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fc093ab289b0bfda3aa1bdfab9c9542be29c7ef385cfcbe77f8c9813588eb48"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "libz-sys"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4487,6 +4496,15 @@ dependencies = [
  "quanta",
  "radix_trie",
  "sketches-ddsketch",
+]
+
+[[package]]
+name = "mimalloc"
+version = "0.1.30"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76ce6a4b40d3bff9eb3ce9881ca0737a85072f9f975886082640cd46a75cdb35"
+dependencies = [
+ "libmimalloc-sys",
 ]
 
 [[package]]
@@ -8681,6 +8699,7 @@ dependencies = [
  "md-5",
  "metrics",
  "metrics-tracing-context",
+ "mimalloc",
  "mlua",
  "mongodb",
  "nats",

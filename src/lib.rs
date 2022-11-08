@@ -22,6 +22,9 @@ extern crate tracing;
 #[macro_use]
 extern crate derivative;
 
+#[cfg(all(feature = "tikv-jemallocator", feature = "mimalloc"))]
+compile_error!("features `tikv-jemallocator` and `mimalloc` are mutually exclusive");
+
 #[cfg(any(
     all(feature = "tikv-jemallocator", target_os = "macos"),
     all(feature = "tikv-jemallocator", not(feature = "allocation-tracing"))
@@ -38,6 +41,24 @@ static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 static ALLOC: self::internal_telemetry::allocations::Allocator<tikv_jemallocator::Jemalloc> =
     self::internal_telemetry::allocations::get_grouped_tracing_allocator(
         tikv_jemallocator::Jemalloc,
+    );
+
+#[cfg(any(
+    all(feature = "mimalloc", target_os = "macos"),
+    all(feature = "mimalloc", not(feature = "allocation-tracing"))
+))]
+#[global_allocator]
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+#[cfg(all(
+    feature = "mimalloc",
+    feature = "allocation-tracing",
+    not(target_os = "macos")
+))]
+#[global_allocator]
+static ALLOC: self::internal_telemetry::allocations::Allocator<mimalloc::MiMalloc> =
+    self::internal_telemetry::allocations::get_grouped_tracing_allocator(
+        mimalloc::MiMalloc,
     );
 
 #[allow(unreachable_pub)]
