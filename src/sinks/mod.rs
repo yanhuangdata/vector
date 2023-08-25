@@ -69,6 +69,8 @@ pub mod kafka;
 pub mod loki;
 #[cfg(feature = "sinks-mezmo")]
 pub mod mezmo;
+#[cfg(feature = "sinks-memory_queue")]
+pub mod memory_queue;
 #[cfg(feature = "sinks-nats")]
 pub mod nats;
 #[cfg(feature = "sinks-new_relic")]

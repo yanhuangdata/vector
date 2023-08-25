@@ -315,7 +315,7 @@ socket2 = { version = "0.5.3", default-features = false }
 stream-cancel = { version = "0.8.1", default-features = false }
 strip-ansi-escapes = { version = "0.2.0", default-features = false }
 syslog = { version = "6.1.0", default-features = false, optional = true }
-tikv-jemallocator = { version = "0.5.4", default-features = false, optional = true }
+mimalloc = { version = "0.1.30", default-features = true, optional = true}
 tokio-postgres = { version = "0.7.7", default-features = false, features = ["runtime", "with-chrono-0_4"], optional = true }
 tokio-tungstenite = {version = "0.20.0", default-features = false, features = ["connect"], optional = true}
 toml = { version = "0.7.6", default-features = false, features = ["parse", "display"] }
@@ -420,8 +420,7 @@ target-powerpc64le-unknown-linux-gnu = ["api", "api-client", "enrichment-tables"
 target-powerpc-unknown-linux-gnu = ["api", "api-client", "enrichment-tables", "rdkafka?/cmake_build", "sinks", "sources", "sources-dnstap", "transforms", "unix", "enterprise"]
 
 # Enables features that work only on systems providing `cfg(unix)`
-unix = ["tikv-jemallocator", "allocation-tracing"]
-allocation-tracing = []
+unix = ["mimalloc"]
 
 # Enables kubernetes dependencies and shared code. Kubernetes-related sources,
 # transforms and sinks should depend on this feature.
@@ -713,7 +712,7 @@ sinks-statsd = ["sinks-utils-udp", "tokio-util/net"]
 sinks-utils-udp = []
 sinks-vector = ["sinks-utils-udp", "dep:tonic", "protobuf-build"]
 sinks-websocket = ["dep:tokio-tungstenite"]
-sinks-webhdfs = ["dep:opendal"]
+sinks-memory_queue = []
 
 # Datadog integration
 enterprise = [

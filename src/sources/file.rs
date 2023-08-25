@@ -234,6 +234,9 @@ pub struct FileConfig {
     #[serde(default)]
     pub encoding: Option<EncodingConfig>,
 
+    /// whether to keep watching the file
+    pub keep_watching: bool,
+
     #[configurable(derived)]
     #[serde(default, deserialize_with = "bool_or_struct")]
     acknowledgements: SourceAcknowledgementsConfig,
@@ -391,6 +394,7 @@ impl Default for FileConfig {
             remove_after_secs: None,
             line_delimiter: default_line_delimiter(),
             encoding: None,
+            keep_watching: true,
             acknowledgements: Default::default(),
             log_namespace: None,
         }
@@ -583,6 +587,7 @@ pub fn file_source(
         (None, shutdown.clone().map(|_| ()).boxed())
     };
 
+    let keep_watching = config.keep_watching;
     let checkpoints = checkpointer.view();
     Box::pin(async move {
         info!(message = "Starting file server.", include = ?include, exclude = ?exclude);
@@ -669,7 +674,12 @@ pub fn file_source(
         let span = info_span!("file_server");
         spawn_blocking(move || {
             let _enter = span.enter();
-            let result = file_server.run(tx, shutdown, shutdown_checkpointer, checkpointer);
+            let result = if keep_watching {
+                file_server.run(tx, shutdown, shutdown_checkpointer, checkpointer)
+            } else {
+                file_server.run_batch(tx, shutdown, shutdown_checkpointer, checkpointer)
+            };
+
             emit!(FileOpen { count: 0 });
             // Panic if we encounter any error originating from the file server.
             // We're at the `spawn_blocking` call, the panic will be caught and
