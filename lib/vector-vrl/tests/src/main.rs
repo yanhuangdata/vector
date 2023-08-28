@@ -13,7 +13,7 @@ use vrl::compiler::{CompileConfig, TimeZone, VrlRuntime};
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
-static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 #[derive(Parser, Debug)]
 #[clap(name = "VRL Tests", about = "Vector Remap Language Tests")]

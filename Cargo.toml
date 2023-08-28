@@ -712,6 +712,7 @@ sinks-statsd = ["sinks-utils-udp", "tokio-util/net"]
 sinks-utils-udp = []
 sinks-vector = ["sinks-utils-udp", "dep:tonic", "protobuf-build"]
 sinks-websocket = ["dep:tokio-tungstenite"]
+sinks-webhdfs = ["dep:opendal"]
 sinks-memory_queue = []
 
 # Datadog integration
