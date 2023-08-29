@@ -292,7 +292,7 @@ nkeys = { version = "0.3.1", default-features = false, optional = true }
 nom = { version = "7.1.3", default-features = false, optional = true }
 notify = { version = "6.0.1", default-features = false, features = ["macos_fsevent"] }
 once_cell = { version = "1.18", default-features = false }
-openssl = { version = "0.10.56", default-features = false, features = ["vendored"] }
+openssl = { version = "0.10.56", default-features = false }
 openssl-probe = { version = "0.1.5", default-features = false }
 ordered-float = { version = "3.7.0", default-features = false }
 paste = "1.0.14"
@@ -302,7 +302,7 @@ postgres-openssl = { version = "0.5.0", default-features = false, features = ["r
 pulsar = { version = "6.0.1", default-features = false, features = ["tokio-runtime", "auth-oauth2", "flate2", "lz4", "snap", "zstd"], optional = true }
 rand = { version = "0.8.5", default-features = false, features = ["small_rng"] }
 rand_distr = { version = "0.4.3", default-features = false }
-rdkafka = { version = "0.33.2", default-features = false, features = ["tokio", "libz", "ssl", "zstd"], optional = true }
+rdkafka = { version = "0.33.2", default-features = false, features = ["tokio", "libz", "ssl", "zstd", "dynamic-linking"], optional = true }
 redis = { version = "0.23.2", default-features = false, features = ["connection-manager", "tokio-comp", "tokio-native-tls-comp"], optional = true }
 regex = { version = "1.9.3", default-features = false, features = ["std", "perf"] }
 roaring = { version = "0.10.2", default-features = false, optional = true }
@@ -345,7 +345,7 @@ nix = { version = "0.26.2", default-features = false, features = ["socket", "sig
 [build-dependencies]
 prost-build = { version = "0.11", default-features = false, optional = true }
 tonic-build = { version = "0.9", default-features = false, features = ["transport", "prost"], optional = true }
-openssl-src = { version = "300", default-features = false, features = ["force-engine", "legacy"] }
+openssl-src = { version = "300", default-features = false}
 
 [dev-dependencies]
 approx = "0.5.1"
@@ -389,7 +389,7 @@ openssl-src = { git = "https://github.com/vectordotdev/openssl-src-rs.git", tag 
 
 [features]
 # Default features for *-unknown-linux-gnu and *-apple-darwin
-default = ["api", "api-client", "enrichment-tables", "sinks", "sources", "sources-dnstap", "transforms", "unix", "rdkafka?/gssapi-vendored", "enterprise", "component-validation-runner"]
+default = ["api", "api-client", "enrichment-tables", "sinks", "sources", "sources-dnstap", "transforms", "unix", "rdkafka?/gssapi-vendored", "component-validation-runner"]
 # Default features for `cargo docs`. The same as `default` but without `rdkafka?/gssapi-vendored` which would require installing libsasl in our doc build environment.
 docs = ["api", "api-client", "enrichment-tables", "sinks", "sources", "sources-dnstap", "transforms", "unix", "enterprise", "component-validation-runner"]
 # Default features for *-unknown-linux-* which make use of `cmake` for dependencies
@@ -420,7 +420,7 @@ target-powerpc64le-unknown-linux-gnu = ["api", "api-client", "enrichment-tables"
 target-powerpc-unknown-linux-gnu = ["api", "api-client", "enrichment-tables", "rdkafka?/cmake_build", "sinks", "sources", "sources-dnstap", "transforms", "unix", "enterprise"]
 
 # Enables features that work only on systems providing `cfg(unix)`
-unix = ["mimalloc"]
+unix = []
 
 # Enables kubernetes dependencies and shared code. Kubernetes-related sources,
 # transforms and sinks should depend on this feature.
@@ -469,7 +469,15 @@ enrichment-tables = ["enrichment-tables-geoip"]
 enrichment-tables-geoip = ["dep:maxminddb"]
 
 # Sources
-sources = ["sources-logs", "sources-metrics"]
+sources = ["custom-sources-logs"]
+custom-sources-logs = [
+  "sources-file",
+  "sources-demo_logs",
+  "sources-stdin",
+  "sources-http_server",
+  "sources-kafka",
+  "sources-vector"
+]
 sources-logs = [
   "sources-amqp",
   "sources-aws_kinesis_firehose",
@@ -607,7 +615,26 @@ transforms-tag_cardinality_limit = ["dep:bloomy", "dep:hashbrown"]
 transforms-throttle = ["dep:governor"]
 
 # Sinks
-sinks = ["sinks-logs", "sinks-metrics"]
+sinks = ["custom-sinks-logs"]
+custom-sinks-logs = [
+    "sinks-blackhole",
+    "sinks-clickhouse",
+    "sinks-console",
+    "sinks-elasticsearch",
+    "sinks-file",
+    "sinks-http",
+    "sinks-influxdb",
+    "sinks-kafka",
+    "sinks-loki",
+    "sinks-memory_queue",
+    "sinks-nats",
+    "sinks-pulsar",
+    "sinks-redis",
+    "sinks-socket",
+    "sinks-splunk_hec",
+    "sinks-vector",
+    "sinks-websocket"
+  ]
 sinks-logs = [
   "sinks-amqp",
   "sinks-appsignal",

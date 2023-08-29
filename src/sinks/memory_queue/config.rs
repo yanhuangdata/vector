@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// Configuration for the `memory_queue` sink.
-#[configurable_component(sink("memory_queue"))]
+#[configurable_component(sink("memory_queue", "Send events to built-in memory queue"))]
 #[derive(Clone, Debug, Derivative)]
 #[serde(deny_unknown_fields, default)]
 #[derivative(Default)]
@@ -31,7 +31,7 @@ pub struct MemoryQueueConfig {
 }
 
 inventory::submit! {
-    SinkDescription::new::<MemoryQueueConfig>("memory_queue")
+    SinkDescription::new::<MemoryQueueConfig>("memory_queue", "sink", "memory_queue_sink", "a builtin memory queue sink")
 }
 
 impl GenerateConfig for MemoryQueueConfig {
@@ -41,6 +41,7 @@ impl GenerateConfig for MemoryQueueConfig {
 }
 
 #[async_trait::async_trait]
+#[typetag::serde(name = "memory_queue")]
 impl SinkConfig for MemoryQueueConfig {
     async fn build(&self, _cx: SinkContext) -> crate::Result<(VectorSink, Healthcheck)> {
 

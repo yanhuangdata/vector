@@ -235,6 +235,7 @@ pub struct FileConfig {
     pub encoding: Option<EncodingConfig>,
 
     /// whether to keep watching the file
+    #[serde(default)]
     pub keep_watching: bool,
 
     #[configurable(derived)]
