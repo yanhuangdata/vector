@@ -469,7 +469,7 @@ enrichment-tables = ["enrichment-tables-geoip"]
 enrichment-tables-geoip = ["dep:maxminddb"]
 
 # Sources
-sources = ["custom-sources-logs"]
+sources = ["sources-logs"]
 custom-sources-logs = [
   "sources-file",
   "sources-demo_logs",
