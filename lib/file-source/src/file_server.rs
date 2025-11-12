@@ -196,10 +196,6 @@ where
                                 if watcher.is_need_reread_from_begin() {
                                     // current read position is greater than the file size
                                     // file is updated and need to read from begin
-                                    info!(
-                                        message = "Recoded checkpoint position is greater than current file size, read from beginning.",
-                                        ?path
-                                    );
                                     watcher.reread_from_begin().ok();
                                 }
                             } else if !was_found_this_cycle {

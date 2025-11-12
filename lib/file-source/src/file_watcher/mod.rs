@@ -253,6 +253,10 @@ impl FileWatcher {
             }
         } else {
             self.file_position = 0;
+            info!(
+                message = "Recoded checkpoint position is greater than current file size, read from beginning.",
+                ?self.path
+            );
             Box::new(reader)
         };
         self.reader = new_reader;
