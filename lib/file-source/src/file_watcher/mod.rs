@@ -230,6 +230,39 @@ impl FileWatcher {
         self.file_position
     }
 
+    pub fn is_need_reread_from_begin(&self) -> bool {
+        let result = match std::fs::metadata(&self.path) {
+            Ok(m) => {
+                m.len() < self.file_position
+            }
+            Err(_) => {
+                false
+            }
+        };
+        result
+    }
+
+    pub fn reread_from_begin(&mut self) -> io::Result<()> {
+        let mut reader = io::BufReader::new(fs::File::open(&self.path)?);
+        let gzipped = is_gzipped(&mut reader)?;
+        let new_reader: Box<dyn BufRead> = if gzipped {
+            if self.file_position != 0 {
+                Box::new(null_reader())
+            } else {
+                Box::new(io::BufReader::new(MultiGzDecoder::new(reader)))
+            }
+        } else {
+            self.file_position = 0;
+            info!(
+                message = "Recoded checkpoint position is greater than current file size, read from beginning.",
+                ?self.path
+            );
+            Box::new(reader)
+        };
+        self.reader = new_reader;
+        Ok(())
+    }
+
     /// Read a single line from the underlying file
     ///
     /// This function will attempt to read a new line from its file, blocking,
