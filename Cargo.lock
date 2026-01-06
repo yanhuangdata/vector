@@ -3925,6 +3925,7 @@ dependencies = [
  "quickcheck",
  "serde",
  "serde_json",
+ "sha2",
  "similar-asserts",
  "tempfile",
  "tokio",

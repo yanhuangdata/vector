@@ -220,6 +220,12 @@ pub struct FileConfig {
     #[configurable(metadata(docs::examples = "\r\n"))]
     pub line_delimiter: String,
 
+    /// Last line without line delimiter return timeout,
+    /// if not set, then last line without delimiter will not be return
+    #[configurable(derived)]
+    #[serde(default)]
+    pub read_eof_linger_line: bool,
+
     #[configurable(derived)]
     #[serde(default)]
     pub encoding: Option<EncodingConfig>,
@@ -243,6 +249,10 @@ pub struct FileConfig {
     #[configurable(metadata(docs::type_unit = "seconds"))]
     #[serde(default = "default_rotate_wait", rename = "rotate_wait_secs")]
     pub rotate_wait: Duration,
+
+    /// Read wait sec when read file triggered caused by file change
+    #[serde(default)]
+    pub trigger_wait_sec: Option<u64>,
 }
 
 fn default_max_line_bytes() -> usize {
@@ -309,11 +319,39 @@ pub enum FingerprintConfig {
         lines: usize,
     },
 
+    /// Read lines from the beginning of the file and compute a checksum and with the path as the random salt
+    ChecksumWithPathSalt {
+        /// The number of bytes to skip ahead (or ignore) when reading the data used for generating the checksum.
+        ///
+        /// This can be helpful if all files share a common header that should be skipped.
+        #[serde(default = "default_ignored_header_bytes")]
+        #[configurable(metadata(docs::type_unit = "bytes"))]
+        ignored_header_bytes: usize,
+
+        /// The number of lines to read for generating the checksum.
+        ///
+        /// If your files share a common header that is not always a fixed size,
+        ///
+        /// If the file has less than this amount of lines, it won’t be read at all.
+        #[serde(default = "default_lines")]
+        #[configurable(metadata(docs::type_unit = "lines"))]
+        lines: usize,
+    },
+
     /// Use the [device and inode][inode] as the identifier.
     ///
     /// [inode]: https://en.wikipedia.org/wiki/Inode
     #[serde(rename = "device_and_inode")]
     DevInode,
+
+    /// Use full content as the identifier.
+    /// If file content changed, the checksum is changed too,
+    /// then read the new full content again.
+    FullContentChecksum,
+
+    /// Use the file modifiaction time as the identifier.
+    /// if file is modificate, then trigger reread.
+    ModificationTime,
 }
 
 impl Default for FingerprintConfig {
@@ -344,6 +382,9 @@ impl From<FingerprintConfig> for FingerprintStrategy {
                 lines,
             },
             FingerprintConfig::DevInode => FingerprintStrategy::DevInode,
+            FingerprintConfig::ChecksumWithPathSalt{ ignored_header_bytes, lines } => FingerprintStrategy::ChecksumWithPathSalt { ignored_header_bytes, lines },
+            FingerprintConfig::FullContentChecksum => FingerprintStrategy::FullContentChecksum,
+            FingerprintConfig::ModificationTime => FingerprintStrategy::ModificationTime,
         }
     }
 }
@@ -378,11 +419,13 @@ impl Default for FileConfig {
             oldest_first: false,
             remove_after_secs: None,
             line_delimiter: default_line_delimiter(),
+            read_eof_linger_line: false,
             encoding: None,
             acknowledgements: Default::default(),
             log_namespace: None,
             internal_metrics: Default::default(),
             rotate_wait: default_rotate_wait(),
+            trigger_wait_sec: None,
         }
     }
 }
@@ -542,6 +585,7 @@ pub fn file_source(
         ignore_before,
         max_line_bytes: config.max_line_bytes,
         line_delimiter: line_delimiter_as_bytes,
+        read_eof_linger_line: config.read_eof_linger_line,
         data_dir,
         glob_minimum_cooldown,
         fingerprinter: Fingerprinter::new(strategy, config.max_line_bytes, config.ignore_not_found),
@@ -549,6 +593,7 @@ pub fn file_source(
         remove_after: config.remove_after_secs.map(Duration::from_secs),
         emitter,
         rotate_wait: config.rotate_wait,
+        trigger_wait_sec: config.trigger_wait_sec.map(Duration::from_secs),
     };
 
     let event_metadata = EventMetadata {

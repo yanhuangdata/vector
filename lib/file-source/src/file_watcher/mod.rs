@@ -11,7 +11,7 @@ use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, AsyncSeekExt, BufReader},
     time::Instant,
 };
-use tracing::debug;
+use tracing::{debug, info};
 use vector_common::constants::GZIP_MAGIC;
 
 use file_source_common::{
@@ -54,13 +54,17 @@ pub struct FileWatcher {
     devno: u64,
     inode: u64,
     is_dead: bool,
+    is_sleep: bool,
     reached_eof: bool,
     last_read_attempt: Instant,
     last_read_success: Instant,
+    data_ready_time: Instant,
     last_seen: Instant,
     max_line_bytes: usize,
     line_delimiter: Bytes,
+    read_eof_linger_line: bool,
     buf: BytesMut,
+    trigger_wait_sec: Option<Duration>,
 }
 
 impl FileWatcher {
@@ -75,9 +79,12 @@ impl FileWatcher {
         ignore_before: Option<DateTime<Utc>>,
         max_line_bytes: usize,
         line_delimiter: Bytes,
+        read_eof_linger_line: bool,
+        trigger_wait_sec: Option<Duration>,
     ) -> Result<FileWatcher, std::io::Error> {
         let f = File::open(&path).await?;
         let file_info = f.file_info().await?;
+        let f_size = f.metadata()?.len();
         let (devno, ino) = (file_info.portable_dev(), file_info.portable_ino());
 
         #[cfg(unix)]
@@ -135,7 +142,17 @@ impl FileWatcher {
                     (Box::new(reader), pos)
                 }
                 (false, false, ReadFrom::Checkpoint(file_position)) => {
-                    let pos = reader.seek(SeekFrom::Start(file_position)).await.unwrap();
+                    // if the total size of the read file is lower than the next read position,
+                    // then seek the read position to the beginning
+                    let pos = if f_size < file_position {
+                        info!(
+                            message = "Recoded checkpoint position is greater than current file size, read from beginning.",
+                            ?path
+                        );
+                        reader.seek(io::SeekFrom::Start(0)).unwrap()
+                    } else {
+                        reader.seek(SeekFrom::Start(file_position)).await.unwrap()
+                    };
                     (Box::new(reader), pos)
                 }
                 (false, false, ReadFrom::Beginning) => {
@@ -163,13 +180,17 @@ impl FileWatcher {
             devno,
             inode: ino,
             is_dead: false,
+            is_sleep: false,
             reached_eof: false,
             last_read_attempt: ts,
             last_read_success: ts,
+            data_ready_time: Instant::now(),
             last_seen: ts,
             max_line_bytes,
             line_delimiter,
+            read_eof_linger_line,
             buf: BytesMut::new(),
+            trigger_wait_sec,
         })
     }
 
@@ -217,6 +238,14 @@ impl FileWatcher {
 
     pub fn dead(&self) -> bool {
         self.is_dead
+    }
+
+    pub fn set_sleep(&mut self) {
+        self.is_sleep = true;
+    }
+
+    pub fn sleepping(&self) -> bool {
+        self.is_sleep
     }
 
     pub fn get_file_position(&self) -> FilePosition {
@@ -284,10 +313,21 @@ impl FileWatcher {
                     }
                 } else {
                     self.reached_eof = true;
-                    Ok(RawLineResult {
-                        raw_line: None,
-                        discarded_for_size_and_truncated,
-                    })
+                    if self.read_eof_linger_line && !self.buf.is_empty() {
+                        // eof linger line read flag is set, get the linger line.
+                        Ok(RawLineResult {
+                            raw_line: Some(RawLine {
+                                offset: initial_position,
+                                bytes: buf,
+                            }),
+                            discarded_for_size_and_truncated,
+                        })
+                    } else {
+                        Ok(RawLineResult {
+                            raw_line: None,
+                            discarded_for_size_and_truncated,
+                        })
+                    }
                 }
             }
             Err(e) => {
@@ -318,6 +358,15 @@ impl FileWatcher {
     pub fn should_read(&self) -> bool {
         self.last_read_success.elapsed() < Duration::from_secs(10)
             || self.last_read_attempt.elapsed() > Duration::from_secs(10)
+    }
+
+    #[inline]
+    pub fn should_wait(&self) -> bool {
+        if let Some(wait_sec) = self.trigger_wait_sec {
+            self.data_ready_time.elapsed() < wait_sec
+        } else {
+            false
+        }
     }
 
     #[inline]

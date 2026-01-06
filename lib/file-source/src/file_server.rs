@@ -51,6 +51,7 @@ where
     pub ignore_before: Option<DateTime<Utc>>,
     pub max_line_bytes: usize,
     pub line_delimiter: Bytes,
+    pub read_eof_linger_line: bool,
     pub data_dir: PathBuf,
     pub glob_minimum_cooldown: Duration,
     pub fingerprinter: Fingerprinter,
@@ -58,6 +59,7 @@ where
     pub remove_after: Option<Duration>,
     pub emitter: E,
     pub rotate_wait: Duration,
+    pub trigger_wait_sec: Option<Duration>,
 }
 
 /// `FileServer` as Source
@@ -105,7 +107,7 @@ where
 
         let mut known_small_files = HashMap::new();
 
-        let mut existing_files = Vec::new();
+        let mut existing_files: Vec<(PathBuf, FileFingerprint)> = Vec::new();
         for path in self.paths_provider.paths().into_iter() {
             if let Some(file_id) = self
                 .fingerprinter
@@ -283,7 +285,12 @@ where
             let mut global_bytes_read: usize = 0;
             let mut maxed_out_reading_single_file = false;
             for (&file_id, watcher) in &mut fp_map {
-                if !watcher.should_read() {
+                if !watcher.should_read() || watcher.sleepping() {
+                    continue;
+                }
+                // if data ready time to current is less than trigger wait sec,
+                // then skip current watcher.
+                if watcher.should_wait() {
                     continue;
                 }
 
@@ -345,6 +352,22 @@ where
                                 self.emitter.emit_file_delete_error(&watcher.path, error);
                             }
                         }
+                    }
+                    // full_content and update_time not need to get the increase data when file is update
+                    // every update of the file can be treated as a new file
+                    // so older watch will be sleep after read the full content
+                    let should_sleep = match file_id {
+                        crate::FileFingerprint::BytesChecksum(_) | 
+                        crate::FileFingerprint::FirstLinesChecksum(_) |
+                        crate::FileFingerprint::DevInode(_, _) | 
+                        crate::FileFingerprint::Unknown(_) |
+                        crate::FileFingerprint::ChecksumWithPathSalt(_, _) => false,
+                    
+                        crate::FileFingerprint::FullContentChecksum(_) |
+                        crate::FileFingerprint::ModificationTime(_, _) => true,
+                    };
+                    if  should_sleep && watcher.reached_eof() {
+                        watcher.set_sleep();
                     }
                 }
 
@@ -455,7 +478,9 @@ where
         // `kubernetes_logs` source returns the files well after start-up, once it has populated
         // them from the k8s metadata, so we now just always use the checkpoints unless opted out.
         // https://github.com/vectordotdev/vector/issues/7139
-        let read_from = if !self.ignore_checkpoints {
+        let read_from = if file_id.read_from_beginning() {
+            ReadFrom::Beginning
+        } else if !self.ignore_checkpoints {
             checkpoints
                 .get(file_id)
                 .map(ReadFrom::Checkpoint)
@@ -470,6 +495,8 @@ where
             self.ignore_before,
             self.max_line_bytes,
             self.line_delimiter.clone(),
+            self.read_eof_linger_line,
+            self.trigger_wait_sec,
         )
         .await
         {
@@ -480,6 +507,21 @@ where
                     self.emitter.emit_file_added(&path);
                 }
                 watcher.set_file_findable(true);
+                
+                let new_watch_path = watcher.path.clone().into_os_string().into_string().unwrap();
+                // Remove FileWatchers which is sleepping 
+                // and watch path is same with the new watcher.
+                fp_map.retain(|file_id, watcher| {
+                    let watched_path = watcher.path.clone().into_os_string().into_string().unwrap();
+                    if watcher.sleepping() && watched_path == new_watch_path {
+                        self.emitter
+                            .emit_file_unwatched(&watcher.path, watcher.reached_eof());
+                        checkpoints.set_dead(*file_id);
+                        false
+                    } else {
+                        true
+                    }
+                });
                 fp_map.insert(file_id, watcher);
             }
             Err(error) => self.emitter.emit_file_watch_error(&path, error),

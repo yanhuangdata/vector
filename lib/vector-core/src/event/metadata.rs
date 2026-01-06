@@ -78,6 +78,7 @@ pub(super) struct Inner {
     /// An internal vector id that can be used to identify this event across all components.
     #[derivative(PartialEq = "ignore")]
     pub(crate) source_event_id: Option<Uuid>,
+    pub(crate) source_event_id: Option<Uuid>,
 }
 
 /// Metric Origin metadata for submission to Datadog.

@@ -34,6 +34,11 @@ use crate::{
     schema::Definition,
 };
 
+use crate::{
+    config::{ComponentKey, OutputId},
+    schema::Definition,
+};
+
 pub(crate) const CHUNK_SIZE: usize = 1000;
 
 #[cfg(any(test, feature = "test-utils"))]
