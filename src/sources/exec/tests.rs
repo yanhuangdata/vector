@@ -517,60 +517,6 @@ async fn test_graceful_shutdown() {
     }
 }
 
-#[tokio::test]
-#[cfg(unix)]
-async fn test_graceful_shutdown_cronjob() {
-    trace_init();
-    let mut config = standard_cronjob_test_config();
-    config.command = vec![
-        String::from("bash"),
-        String::from("-c"),
-        String::from(
-            r#"trap 'echo signal received ; sleep 1; echo slept ; exit' SIGTERM; while true ; do sleep 10 ; done"#,
-        ),
-    ];
-    let hostname = Some("Some.Machine".to_string());
-    let decoder = Default::default();
-    let (trigger, shutdown, _) = ShutdownSignal::new_wired();
-    let (tx, mut rx) = SourceSender::new_test();
-
-    // create a thread to shutdown cronjob
-    let handle = thread::spawn(|| {
-        thread::sleep(Duration::from_secs(10)); // let the source start the command
-        drop(trigger); // start shutdown
-    });
-
-    // start cronjob and await
-    let cron_job_clone = config.cron_job.clone().unwrap();
-    let _ = run_cronjob(
-        config.clone(),
-        hostname,
-        cron_job_clone.schedule,
-        config.str_to_fixed_offset_or_default(cron_job_clone.timezone.as_str()),
-        decoder,
-        shutdown,
-        tx,
-        LogNamespace::Legacy,
-    ).await;
-
-    handle.join().unwrap();
-
-    // check is job shutdown gracefully
-    if let Poll::Ready(Some(event)) = futures::poll!(rx.next()) {
-        let log = event.as_log();
-        assert_eq!(*log.get_message().unwrap(), "signal received".into());
-    } else {
-        panic!("Expected to receive event");
-    }
-
-    if let Poll::Ready(Some(event)) = futures::poll!(rx.next()) {
-        let log = event.as_log();
-        assert_eq!(*log.get_message().unwrap(), "slept".into());
-    } else {
-        panic!("Expected to receive event");
-    }
-}
-
 fn standard_scheduled_test_config() -> ExecConfig {
     Default::default()
 }

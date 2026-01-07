@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    fs::File,
+    fs::{self, File},
     io::{AsyncBufRead, AsyncBufReadExt, AsyncSeekExt, BufReader},
     time::Instant,
 };
@@ -84,14 +84,13 @@ impl FileWatcher {
     ) -> Result<FileWatcher, std::io::Error> {
         let f = File::open(&path).await?;
         let file_info = f.file_info().await?;
-        let f_size = f.metadata()?.len();
         let (devno, ino) = (file_info.portable_dev(), file_info.portable_ino());
 
         #[cfg(unix)]
         let metadata = file_info;
         #[cfg(windows)]
         let metadata = f.metadata().await?;
-
+        let f_size = metadata.len();
         let mut reader = BufReader::new(f);
 
         let too_old = if let (Some(ignore_before), Ok(modified_time)) = (
@@ -149,7 +148,7 @@ impl FileWatcher {
                             message = "Recoded checkpoint position is greater than current file size, read from beginning.",
                             ?path
                         );
-                        reader.seek(io::SeekFrom::Start(0)).unwrap()
+                        reader.seek(io::SeekFrom::Start(0)).await.unwrap()
                     } else {
                         reader.seek(SeekFrom::Start(file_position)).await.unwrap()
                     };
@@ -252,6 +251,40 @@ impl FileWatcher {
         self.file_position
     }
 
+    pub async fn is_need_reread_from_begin(&self) -> bool {
+        let metadata = fs::metadata(&self.path).await;
+        let result = match metadata {
+            Ok(m) => {
+                m.len() < self.file_position
+            }
+            Err(_) => {
+                false
+            }
+        };
+        result
+    }
+
+    pub async fn reread_from_begin(&mut self) -> io::Result<()> {
+        let mut reader = BufReader::new(File::open(&self.path).await?);
+        let gzipped = is_gzipped(&mut reader).await?;
+        let new_reader: Box<dyn AsyncBufRead + Send + Unpin> = if gzipped {
+            if self.file_position != 0 {
+                Box::new(null_reader())
+            } else {
+                Box::new(BufReader::new(GzipDecoder::new(reader)))
+            }
+        } else {
+            self.file_position = 0;
+            info!(
+                message = "Recoded checkpoint position is greater than current file size, read from beginning.",
+                ?self.path
+            );
+            Box::new(reader)
+        };
+        self.reader = new_reader;
+        Ok(())
+    }
+
     /// Read a single line from the underlying file
     ///
     /// This function will attempt to read a new line from its file, blocking,
@@ -318,7 +351,7 @@ impl FileWatcher {
                         Ok(RawLineResult {
                             raw_line: Some(RawLine {
                                 offset: initial_position,
-                                bytes: buf,
+                                bytes: self.buf.split().freeze(),
                             }),
                             discarded_for_size_and_truncated,
                         })

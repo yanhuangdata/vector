@@ -202,6 +202,11 @@ where
                                     message = "Continue watching file.",
                                     path = ?path,
                                 );
+                                if watcher.is_need_reread_from_begin().await {
+                                    // current read position is greater than the file size
+                                    // file is updated and need to read from begin
+                                    watcher.reread_from_begin().await.ok();
+                                }
                             } else if !was_found_this_cycle {
                                 // matches a file with a different path
                                 info!(
@@ -357,14 +362,12 @@ where
                     // every update of the file can be treated as a new file
                     // so older watch will be sleep after read the full content
                     let should_sleep = match file_id {
-                        crate::FileFingerprint::BytesChecksum(_) | 
-                        crate::FileFingerprint::FirstLinesChecksum(_) |
-                        crate::FileFingerprint::DevInode(_, _) | 
-                        crate::FileFingerprint::Unknown(_) |
-                        crate::FileFingerprint::ChecksumWithPathSalt(_, _) => false,
+                        FileFingerprint::FirstLinesChecksum(_) |
+                        FileFingerprint::DevInode(_, _) | 
+                        FileFingerprint::ChecksumWithPathSalt(_, _) => false,
                     
-                        crate::FileFingerprint::FullContentChecksum(_) |
-                        crate::FileFingerprint::ModificationTime(_, _) => true,
+                        FileFingerprint::FullContentChecksum(_) |
+                        FileFingerprint::ModificationTime(_, _) => true,
                     };
                     if  should_sleep && watcher.reached_eof() {
                         watcher.set_sleep();
@@ -478,9 +481,7 @@ where
         // `kubernetes_logs` source returns the files well after start-up, once it has populated
         // them from the k8s metadata, so we now just always use the checkpoints unless opted out.
         // https://github.com/vectordotdev/vector/issues/7139
-        let read_from = if file_id.read_from_beginning() {
-            ReadFrom::Beginning
-        } else if !self.ignore_checkpoints {
+        let read_from = if !self.ignore_checkpoints {
             checkpoints
                 .get(file_id)
                 .map(ReadFrom::Checkpoint)
