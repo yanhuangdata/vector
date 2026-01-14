@@ -1,9 +1,12 @@
 use std::{
     collections::HashMap,
-    io::{ErrorKind, Result, SeekFrom},
+    io::{self, ErrorKind, Result, SeekFrom},
     path::{Path, PathBuf},
     time,
 };
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use sha2::{Sha256, Digest};
 
 use async_compression::tokio::bufread::GzipDecoder;
 use crc::Crc;
@@ -49,7 +52,13 @@ pub enum FingerprintStrategy {
         ignored_header_bytes: usize,
         lines: usize,
     },
+    ChecksumWithPathSalt {
+        ignored_header_bytes: usize,
+        lines: usize,
+    },
     DevInode,
+    FullContentChecksum,
+    ModificationTime,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy, Serialize, Deserialize, Ord, PartialOrd)]
@@ -57,7 +66,10 @@ pub enum FingerprintStrategy {
 pub enum FileFingerprint {
     #[serde(alias = "first_line_checksum")]
     FirstLinesChecksum(u64),
+    ChecksumWithPathSalt(u64, u64),
     DevInode(u64, u64),
+    FullContentChecksum(u64),
+    ModificationTime(u64, u64),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -179,6 +191,36 @@ impl Fingerprinter {
                 let dev = file_info.portable_dev();
                 let ino = file_info.portable_ino();
                 Ok(DevInode(dev, ino))
+            }
+            FingerprintStrategy::FullContentChecksum => {
+                let mut file = std::fs::File::open(path)?;
+                let mut hasher = Sha256::new();
+                let _ = io::copy(&mut file, &mut hasher)?;
+                let hash:[u8; 32] = hasher.finalize().try_into().unwrap();
+                let fingerprint = FINGERPRINT_CRC.checksum(&hash);
+                Ok(FullContentChecksum(fingerprint))
+            }
+            FingerprintStrategy::ModificationTime => {
+                let metadata = std::fs::metadata(path)?;
+                let update_timestamp = metadata.modified()?.duration_since(std::time::SystemTime::UNIX_EPOCH).unwrap().as_secs();
+                let path_str = path.to_str().unwrap();
+                let mut hasher = DefaultHasher::new();
+                path_str.hash(&mut hasher);
+                Ok(ModificationTime(hasher.finish(), update_timestamp))
+            }
+            FingerprintStrategy::ChecksumWithPathSalt{ignored_header_bytes, lines} => {
+                let buffer = self.buffer.resize_slice_mut(self.max_line_length);
+                let mut fp = File::open(path).await?;
+                let mut reader = UncompressedReaderImpl::reader(&mut fp).await?;
+
+                skip_first_n_bytes(&mut reader, ignored_header_bytes).await?;
+                let bytes_read = fingerprinter_read_until(reader, b'\n', lines, buffer).await?;
+                let fingerprint = FINGERPRINT_CRC.checksum(&buffer[..bytes_read]);
+                // handle path salt
+                let path_str = path.to_str().unwrap();
+                let mut hasher = DefaultHasher::new();
+                path_str.hash(&mut hasher);
+                Ok(ChecksumWithPathSalt(fingerprint, hasher.finish()))
             }
             FingerprintStrategy::FirstLinesChecksum {
                 ignored_header_bytes,

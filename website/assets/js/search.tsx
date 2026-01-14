@@ -1,5 +1,7 @@
 import { autocomplete } from '@algolia/autocomplete-js'
 import Typesense from 'typesense'
+import { autocomplete } from '@algolia/autocomplete-js'
+import Typesense from 'typesense'
 import React, { createElement, Fragment, useEffect, useRef } from 'react'
 import ReactDOM, { render } from 'react-dom'
 
@@ -75,17 +77,23 @@ const Chevron: React.FC = () => {
 
 const Result = ({ hit, components, category }) => {
   const hierarchy = hit.document.hierarchy.concat(hit.document.title)
+
+const Result = ({ hit, components, category }) => {
+  const hierarchy = hit.document.hierarchy.concat(hit.document.title)
   const isRootPage = hierarchy.length < 1
 
   return (
     <a href={hit.document.itemUrl}>
+    <a href={hit.document.itemUrl}>
       <div className="border-r border-gray-300 py-4 pl-2 h-full leading-relaxed">
+        {category}
         {category}
       </div>
       <div className="p-2 block">
         <div className="text-gray-800 text-md mb-1 font-medium leading-relaxed ">
           {!isRootPage &&
             hierarchy.map((t, i) => (
+              <span key={`${hit.document.itemUrl}-${t}`}>
               <span key={`${hit.document.itemUrl}-${t}`}>
                 <span className="w-2 h-2 inline" key={`${t.itemUrl}`}>
                   {t}
@@ -102,8 +110,10 @@ const Result = ({ hit, components, category }) => {
         <p className="text-gray-600 text-sm">
           {hit.content && (
             <span dangerouslySetInnerHTML={{__html: hit.content}} />
+            <span dangerouslySetInnerHTML={{__html: hit.content}} />
           )}
           {!hit.content && (
+            <span style={{ wordBreak: 'break-word' }}>{hit.document.itemUrl}</span>
             <span style={{ wordBreak: 'break-word' }}>{hit.document.itemUrl}</span>
           )}
         </p>
@@ -199,7 +209,22 @@ const Search = () => {
             }).then((result) => {
               // order the hits by page group
               // const hits = result.hits.sort((a, b) => (a.document.pageTitle < b.document.pageTitle ? -1 : 1))
+          async getItems() {
+            const results = (query) => searchClient.collections('vector_docs').documents().search({
+              q: query,
+              preset: 'vector_docs_search',
+              exhaustive_search: true,
+              highlight_fields: 'content',
+              highlight_full_fields: 'content'
 
+            }).then((result) => {
+              // order the hits by page group
+              // const hits = result.hits.sort((a, b) => (a.document.pageTitle < b.document.pageTitle ? -1 : 1))
+
+              // add page as category if there are duplicates
+              const hitsWithCategory = result.hits.map((h, i) => {
+                const prev = result.hits[i - 1] as any
+                const title = h.document.pageTitle
               // add page as category if there are duplicates
               const hitsWithCategory = result.hits.map((h, i) => {
                 const prev = result.hits[i - 1] as any
@@ -209,7 +234,15 @@ const Search = () => {
                 if (!prev) {
                   return { ...h, category: title }
                 }
+                // if no previous hit is in this category
+                if (!prev) {
+                  return { ...h, category: title }
+                }
 
+                // skip if there is already one in this category
+                if (prev && prev.document.pageTitle === title) {
+                  return h
+                }
                 // skip if there is already one in this category
                 if (prev && prev.document.pageTitle === title) {
                   return h
@@ -219,18 +252,30 @@ const Search = () => {
                 if (prev && prev.document.pageTitle !== title) {
                   return { ...h, category: title }
                 }
+                // add category if needed
+                if (prev && prev.document.pageTitle !== title) {
+                  return { ...h, category: title }
+                }
 
+                return h
+              })
+              return hitsWithCategory
                 return h
               })
               return hitsWithCategory
             })
             return await results(query)
+            return await results(query)
           },
           getItemUrl({ item }) {
+            return item.document.itemUrl
             return item.document.itemUrl
           },
           templates: {
             item({ item, components }) {
+              const highlight = item.highlights.length && item.highlights.find(h => h.field === 'content' || {}).value || item.document['content']
+              item['content'] = highlight
+              return <Result hit={item} components={components} category={item.category} />
               const highlight = item.highlights.length && item.highlights.find(h => h.field === 'content' || {}).value || item.document['content']
               item['content'] = highlight
               return <Result hit={item} components={components} category={item.category} />
@@ -240,10 +285,16 @@ const Search = () => {
             },
           },
         }
+            noResults() {
+              return 'No results found.';
+            },
+          },
+        }
       ]}
     />
   )
 }
+
 
 
 ReactDOM.render(<Search />, document.getElementById('site-search'))

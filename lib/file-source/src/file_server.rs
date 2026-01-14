@@ -51,6 +51,7 @@ where
     pub ignore_before: Option<DateTime<Utc>>,
     pub max_line_bytes: usize,
     pub line_delimiter: Bytes,
+    pub read_eof_linger_line: bool,
     pub data_dir: PathBuf,
     pub glob_minimum_cooldown: Duration,
     pub fingerprinter: Fingerprinter,
@@ -58,6 +59,7 @@ where
     pub remove_after: Option<Duration>,
     pub emitter: E,
     pub rotate_wait: Duration,
+    pub trigger_wait_sec: Option<Duration>,
 }
 
 /// `FileServer` as Source
@@ -105,7 +107,7 @@ where
 
         let mut known_small_files = HashMap::new();
 
-        let mut existing_files = Vec::new();
+        let mut existing_files: Vec<(PathBuf, FileFingerprint)> = Vec::new();
         for path in self.paths_provider.paths().into_iter() {
             if let Some(file_id) = self
                 .fingerprinter
@@ -200,6 +202,11 @@ where
                                     message = "Continue watching file.",
                                     path = ?path,
                                 );
+                                if watcher.is_need_reread_from_begin().await {
+                                    // current read position is greater than the file size
+                                    // file is updated and need to read from begin
+                                    watcher.reread_from_begin().await.ok();
+                                }
                             } else if !was_found_this_cycle {
                                 // matches a file with a different path
                                 info!(
@@ -283,7 +290,12 @@ where
             let mut global_bytes_read: usize = 0;
             let mut maxed_out_reading_single_file = false;
             for (&file_id, watcher) in &mut fp_map {
-                if !watcher.should_read() {
+                if !watcher.should_read() || watcher.sleepping() {
+                    continue;
+                }
+                // if data ready time to current is less than trigger wait sec,
+                // then skip current watcher.
+                if watcher.should_wait() {
                     continue;
                 }
 
@@ -345,6 +357,20 @@ where
                                 self.emitter.emit_file_delete_error(&watcher.path, error);
                             }
                         }
+                    }
+                    // full_content and update_time not need to get the increase data when file is update
+                    // every update of the file can be treated as a new file
+                    // so older watch will be sleep after read the full content
+                    let should_sleep = match file_id {
+                        FileFingerprint::FirstLinesChecksum(_) |
+                        FileFingerprint::DevInode(_, _) | 
+                        FileFingerprint::ChecksumWithPathSalt(_, _) => false,
+                    
+                        FileFingerprint::FullContentChecksum(_) |
+                        FileFingerprint::ModificationTime(_, _) => true,
+                    };
+                    if  should_sleep && watcher.reached_eof() {
+                        watcher.set_sleep();
                     }
                 }
 
@@ -470,6 +496,8 @@ where
             self.ignore_before,
             self.max_line_bytes,
             self.line_delimiter.clone(),
+            self.read_eof_linger_line,
+            self.trigger_wait_sec,
         )
         .await
         {
@@ -480,6 +508,21 @@ where
                     self.emitter.emit_file_added(&path);
                 }
                 watcher.set_file_findable(true);
+                
+                let new_watch_path = watcher.path.clone().into_os_string().into_string().unwrap();
+                // Remove FileWatchers which is sleepping 
+                // and watch path is same with the new watcher.
+                fp_map.retain(|file_id, watcher| {
+                    let watched_path = watcher.path.clone().into_os_string().into_string().unwrap();
+                    if watcher.sleepping() && watched_path == new_watch_path {
+                        self.emitter
+                            .emit_file_unwatched(&watcher.path, watcher.reached_eof());
+                        checkpoints.set_dead(*file_id);
+                        false
+                    } else {
+                        true
+                    }
+                });
                 fp_map.insert(file_id, watcher);
             }
             Err(error) => self.emitter.emit_file_watch_error(&path, error),

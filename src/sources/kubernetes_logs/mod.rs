@@ -843,6 +843,7 @@ impl Source {
             max_line_bytes: resolved_max_line_bytes,
             // Delimiter bytes that is used to read the file line-by-line
             line_delimiter: Bytes::from("\n"),
+            read_eof_linger_line: false,
             // The directory where to keep the checkpoints.
             data_dir,
             // This value specifies not exactly the globbing, but interval
@@ -870,6 +871,7 @@ impl Source {
             },
             // A handle to the current tokio runtime
             rotate_wait,
+            trigger_wait_sec: None,
         };
 
         let (file_source_tx, file_source_rx) = futures::channel::mpsc::channel::<Vec<Line>>(2);
