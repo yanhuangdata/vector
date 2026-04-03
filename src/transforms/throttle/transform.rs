@@ -6,13 +6,13 @@ use governor::{Quota, clock};
 use snafu::Snafu;
 
 use super::{
-    config::{ThrottleConfig, ThrottleInternalMetricsConfig},
+    config::{ThrottleConfig, ThrottleInternalMetricsConfig, ThrottleLimitType},
     rate_limiter::RateLimiterRunner,
 };
 use crate::{
     conditions::Condition,
     config::TransformContext,
-    event::Event,
+    event::{EstimatedJsonEncodedSizeOf, Event},
     internal_events::{TemplateRenderingError, ThrottleEventDiscarded},
     template::Template,
     transforms::TaskTransform,
@@ -24,6 +24,7 @@ pub struct Throttle<C: clock::Clock<Instant = I>, I: clock::Reference> {
     pub flush_keys_interval: Duration,
     key_field: Option<Template>,
     exclude: Option<Condition>,
+    limit_type: ThrottleLimitType,
     pub clock: C,
     internal_metrics: ThrottleInternalMetricsConfig,
 }
@@ -63,6 +64,7 @@ where
             flush_keys_interval,
             key_field: config.key_field.clone(),
             exclude,
+            limit_type: config.limit_type,
             internal_metrics: config.internal_metrics.clone(),
         })
     }
@@ -80,6 +82,16 @@ where
             key,
             emit_events_discarded_per_key: self.internal_metrics.emit_events_discarded_per_key
         });
+    }
+
+    fn permits_for(&self, event: &Event) -> Option<NonZeroU32> {
+        match self.limit_type {
+            ThrottleLimitType::Event => NonZeroU32::new(1),
+            ThrottleLimitType::Byte => {
+                let byte_size = u32::try_from(event.estimated_json_encoded_size_of().get()).ok()?;
+                NonZeroU32::new(byte_size.max(1))
+            }
+        }
     }
 }
 
@@ -119,7 +131,11 @@ where
                             .ok()
                     });
 
-                    if limiter.check_key(&key) {
+                    if self
+                        .permits_for(&event)
+                        .map(|permits| limiter.check_key_n(&key, permits))
+                        .unwrap_or(false)
+                    {
                         Some(event)
                     } else {
                         self.emit_event_discarded(key.unwrap_or_else(|| "None".to_string()));
@@ -152,10 +168,20 @@ mod tests {
 
     use super::*;
     use crate::{
-        event::LogEvent,
+        event::{EstimatedJsonEncodedSizeOf, LogEvent},
         test_util::components::assert_transform_compliance,
         transforms::{Transform, test::create_topology},
     };
+
+    fn log_event_with_message(message: &str) -> Event {
+        LogEvent::from_str_legacy(message).into()
+    }
+
+    fn log_event_with_field(message: &str, field: &str, value: &str) -> Event {
+        let mut log = LogEvent::from_str_legacy(message);
+        log.insert(field, value);
+        log.into()
+    }
 
     #[tokio::test]
     async fn throttle_events() {
@@ -223,6 +249,179 @@ window_secs = 5
 
         // And still nothing there
         assert_eq!(Poll::Ready(None), futures::poll!(out_stream.next()));
+    }
+
+    #[tokio::test]
+    async fn throttle_bytes() {
+        let clock = clock::FakeRelativeClock::default();
+        let event = log_event_with_message("byte-sized-event");
+        let threshold = u32::try_from(event.estimated_json_encoded_size_of().get()).unwrap() * 2;
+        let config = ThrottleConfig {
+            threshold,
+            limit_type: ThrottleLimitType::Byte,
+            window_secs: Duration::from_secs(5),
+            ..Default::default()
+        };
+
+        let throttle = Throttle::new(&config, &TransformContext::default(), clock.clone())
+            .map(Transform::event_task)
+            .unwrap();
+
+        let throttle = throttle.into_task();
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(10);
+        let mut out_stream = throttle.transform_events(Box::pin(rx));
+
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+
+        tx.send(event.clone()).await.unwrap();
+        tx.send(event.clone()).await.unwrap();
+
+        let mut count = 0_u8;
+        while count < 2 {
+            match out_stream.next().await {
+                Some(_event) => {
+                    count += 1;
+                }
+                _ => {
+                    panic!("Unexpectedly received None in output stream");
+                }
+            }
+        }
+        assert_eq!(2, count);
+
+        tx.send(event.clone()).await.unwrap();
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+
+        clock.advance(Duration::from_secs(5));
+
+        tx.send(event).await.unwrap();
+        match out_stream.next().await {
+            Some(_event) => {}
+            _ => {
+                panic!("Unexpectedly received None in output stream");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn throttle_bytes_rejects_oversized_event() {
+        let clock = clock::FakeRelativeClock::default();
+        let event = log_event_with_message(&"x".repeat(128));
+        let event_size = u32::try_from(event.estimated_json_encoded_size_of().get()).unwrap();
+        let config = ThrottleConfig {
+            threshold: event_size - 1,
+            limit_type: ThrottleLimitType::Byte,
+            window_secs: Duration::from_secs(5),
+            ..Default::default()
+        };
+
+        let throttle = Throttle::new(&config, &TransformContext::default(), clock)
+            .map(Transform::event_task)
+            .unwrap();
+
+        let throttle = throttle.into_task();
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(10);
+        let mut out_stream = throttle.transform_events(Box::pin(rx));
+
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+
+        tx.send(event).await.unwrap();
+
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+    }
+
+    #[tokio::test]
+    async fn throttle_bytes_exclude() {
+        let clock = clock::FakeRelativeClock::default();
+        let event = log_event_with_message("byte-sized-event");
+        let threshold = u32::try_from(event.estimated_json_encoded_size_of().get()).unwrap() * 2;
+        let config = toml::from_str::<ThrottleConfig>(&format!(
+            r#"
+threshold = {threshold}
+limit_type = "byte"
+window_secs = 5
+exclude = """
+exists(.special)
+"""
+"#
+        ))
+        .unwrap();
+
+        let throttle = Throttle::new(&config, &TransformContext::default(), clock.clone())
+            .map(Transform::event_task)
+            .unwrap();
+
+        let throttle = throttle.into_task();
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(10);
+        let mut out_stream = throttle.transform_events(Box::pin(rx));
+
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+
+        tx.send(event.clone()).await.unwrap();
+        tx.send(event.clone()).await.unwrap();
+
+        let mut count = 0_u8;
+        while count < 2 {
+            match out_stream.next().await {
+                Some(_event) => count += 1,
+                _ => panic!("Unexpectedly received None in output stream"),
+            }
+        }
+
+        tx.send(event.clone()).await.unwrap();
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+
+        tx.send(log_event_with_field("excluded", "special", "true"))
+            .await
+            .unwrap();
+        match out_stream.next().await {
+            Some(_event) => {}
+            _ => panic!("Unexpectedly received None in output stream"),
+        }
+    }
+
+    #[tokio::test]
+    async fn throttle_bytes_buckets() {
+        let clock = clock::FakeRelativeClock::default();
+        let event_a = log_event_with_field("byte-sized-event", "bucket", "a");
+        let event_b = log_event_with_field("byte-sized-event", "bucket", "b");
+        let threshold = u32::try_from(event_a.estimated_json_encoded_size_of().get()).unwrap();
+        let config = toml::from_str::<ThrottleConfig>(&format!(
+            r#"
+threshold = {threshold}
+limit_type = "byte"
+window_secs = 5
+key_field = "{{{{ bucket }}}}"
+"#
+        ))
+        .unwrap();
+
+        let throttle = Throttle::new(&config, &TransformContext::default(), clock)
+            .map(Transform::event_task)
+            .unwrap();
+
+        let throttle = throttle.into_task();
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(10);
+        let mut out_stream = throttle.transform_events(Box::pin(rx));
+
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+
+        tx.send(event_a).await.unwrap();
+        tx.send(event_b).await.unwrap();
+
+        let mut count = 0_u8;
+        while count < 2 {
+            match out_stream.next().await {
+                Some(_event) => count += 1,
+                _ => panic!("Unexpectedly received None in output stream"),
+            }
+        }
+
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
     }
 
     #[tokio::test]
@@ -366,6 +565,7 @@ key_field = "{{ bucket }}"
         assert_transform_compliance(async move {
             let config = ThrottleConfig {
                 threshold: 1,
+                limit_type: ThrottleLimitType::Event,
                 window_secs: Duration::from_secs_f64(1.0),
                 key_field: None,
                 exclude: None,

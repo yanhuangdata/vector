@@ -1,4 +1,4 @@
-use std::{hash::Hash, sync::Arc, time::Duration};
+use std::{hash::Hash, num::NonZeroU32, sync::Arc, time::Duration};
 
 use governor::{
     Quota, RateLimiter, clock, middleware::NoOpMiddleware, state::keyed::DashMapStateStore,
@@ -39,8 +39,8 @@ where
         }
     }
 
-    pub fn check_key(&self, key: &K) -> bool {
-        self.rate_limiter.check_key(key).is_ok()
+    pub fn check_key_n(&self, key: &K, n: NonZeroU32) -> bool {
+        matches!(self.rate_limiter.check_key_n(key, n), Ok(Ok(_)))
     }
 }
 
