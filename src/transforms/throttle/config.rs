@@ -35,15 +35,51 @@ pub struct ThrottleInternalMetricsConfig {
 }
 
 /// Configuration for the `throttle` transform.
+#[configurable_component]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThrottleLimitType {
+    /// Rate limit based on event count.
+    #[default]
+    Event,
+
+    /// Rate limit based on the estimated JSON-encoded size of events.
+    Byte,
+}
+
+/// Strategy used when a bucket exceeds its configured limit.
+#[configurable_component]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ThrottleExceededAction {
+    /// Drop events that exceed the configured limit.
+    #[default]
+    Drop,
+
+    /// Block until the event can pass through the rate limiter.
+    Block,
+}
+
+/// Configuration for the `throttle` transform.
 #[serde_as]
 #[configurable_component(transform("throttle", "Rate limit logs passing through a topology."))]
 #[derive(Clone, Debug, Default)]
 #[serde(deny_unknown_fields)]
 pub struct ThrottleConfig {
-    /// The number of events allowed for a given bucket per configured `window_secs`.
+    /// The number of units allowed for a given bucket per configured `window_secs`.
     ///
     /// Each unique key has its own `threshold`.
+    ///
+    /// The unit is determined by `limit_type`.
     pub threshold: u32,
+
+    /// The unit used for rate limiting.
+    #[serde(default)]
+    pub limit_type: ThrottleLimitType,
+
+    /// The action taken when an event exceeds the configured rate limit.
+    #[serde(default)]
+    pub exceeded_action: ThrottleExceededAction,
 
     /// The time window in which the configured `threshold` is applied, in seconds.
     #[serde_as(as = "serde_with::DurationSecondsWithFrac<f64>")]
@@ -94,10 +130,50 @@ impl TransformConfig for ThrottleConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::ThrottleConfig;
+    use super::{ThrottleConfig, ThrottleExceededAction, ThrottleLimitType};
 
     #[test]
     fn generate_config() {
         crate::test_util::test_generate_config::<ThrottleConfig>();
+    }
+
+    #[test]
+    fn defaults_limit_type_to_event() {
+        let config = toml::from_str::<ThrottleConfig>(
+            r#"
+threshold = 2
+window_secs = 5
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.limit_type, ThrottleLimitType::Event);
+    }
+
+    #[test]
+    fn defaults_exceeded_action_to_drop() {
+        let config = toml::from_str::<ThrottleConfig>(
+            r#"
+threshold = 2
+window_secs = 5
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.exceeded_action, ThrottleExceededAction::Drop);
+    }
+
+    #[test]
+    fn parses_exceeded_action_block() {
+        let config = toml::from_str::<ThrottleConfig>(
+            r#"
+threshold = 2
+window_secs = 5
+exceeded_action = "block"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.exceeded_action, ThrottleExceededAction::Block);
     }
 }

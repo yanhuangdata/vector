@@ -1,4 +1,4 @@
-use std::{hash::Hash, sync::Arc, time::Duration};
+use std::{hash::Hash, num::NonZeroU32, sync::Arc, time::Duration};
 
 use governor::{
     Quota, RateLimiter, clock, middleware::NoOpMiddleware, state::keyed::DashMapStateStore,
@@ -13,6 +13,7 @@ where
     C: clock::Clock,
 {
     pub rate_limiter: Arc<RateLimiter<K, DashMapStateStore<K>, C, NoOpMiddleware<C::Instant>>>,
+    clock: C,
     flush_handle: tokio::task::JoinHandle<()>,
 }
 
@@ -22,7 +23,7 @@ where
     C: clock::Clock + Clone + Send + Sync + 'static,
 {
     pub fn start(quota: Quota, clock: C, flush_keys_interval: Duration) -> Self {
-        let rate_limiter = Arc::new(RateLimiter::dashmap_with_clock(quota, clock));
+        let rate_limiter = Arc::new(RateLimiter::dashmap_with_clock(quota, clock.clone()));
 
         let rate_limiter_clone = Arc::clone(&rate_limiter);
         let flush_handle = tokio::spawn(async move {
@@ -35,12 +36,25 @@ where
 
         Self {
             rate_limiter,
+            clock,
             flush_handle,
         }
     }
 
-    pub fn check_key(&self, key: &K) -> bool {
-        self.rate_limiter.check_key(key).is_ok()
+    pub fn check_key_n(&self, key: &K, n: NonZeroU32) -> bool {
+        matches!(self.rate_limiter.check_key_n(key, n), Ok(Ok(_)))
+    }
+
+    pub async fn until_key_n_ready(&self, key: &K, n: NonZeroU32) -> Result<(), ()> {
+        loop {
+            match self.rate_limiter.check_key_n(key, n) {
+                Ok(Ok(_)) => return Ok(()),
+                Ok(Err(not_until)) => {
+                    tokio::time::sleep(not_until.wait_time_from(self.clock.now())).await;
+                }
+                Err(_) => return Err(()),
+            }
+        }
     }
 }
 
