@@ -6,7 +6,9 @@ use governor::{Quota, clock};
 use snafu::Snafu;
 
 use super::{
-    config::{ThrottleConfig, ThrottleInternalMetricsConfig, ThrottleLimitType},
+    config::{
+        ThrottleConfig, ThrottleExceededAction, ThrottleInternalMetricsConfig, ThrottleLimitType,
+    },
     rate_limiter::RateLimiterRunner,
 };
 use crate::{
@@ -25,6 +27,7 @@ pub struct Throttle<C: clock::Clock<Instant = I>, I: clock::Reference> {
     key_field: Option<Template>,
     exclude: Option<Condition>,
     limit_type: ThrottleLimitType,
+    exceeded_action: ThrottleExceededAction,
     pub clock: C,
     internal_metrics: ThrottleInternalMetricsConfig,
 }
@@ -65,6 +68,7 @@ where
             key_field: config.key_field.clone(),
             exclude,
             limit_type: config.limit_type,
+            exceeded_action: config.exceeded_action,
             internal_metrics: config.internal_metrics.clone(),
         })
     }
@@ -130,16 +134,22 @@ where
                             })
                             .ok()
                     });
+                    let permits = self.permits_for(&event);
 
-                    if self
-                        .permits_for(&event)
-                        .map(|permits| limiter.check_key_n(&key, permits))
-                        .unwrap_or(false)
-                    {
-                        Some(event)
-                    } else {
-                        self.emit_event_discarded(key.unwrap_or_else(|| "None".to_string()));
-                        None
+                    match (self.exceeded_action, permits) {
+                        (_, Some(permits)) if limiter.check_key_n(&key, permits) => Some(event),
+                        (ThrottleExceededAction::Drop, _) | (_, None) => {
+                            self.emit_event_discarded(key.unwrap_or_else(|| "None".to_string()));
+                            None
+                        }
+                        (ThrottleExceededAction::Block, Some(permits)) => {
+                            if limiter.until_key_n_ready(&key, permits).await.is_ok() {
+                                Some(event)
+                            } else {
+                                self.emit_event_discarded(key.unwrap_or_else(|| "None".to_string()));
+                                None
+                            }
+                        }
                     }
                 } else {
                     Some(event)
@@ -252,6 +262,38 @@ window_secs = 5
     }
 
     #[tokio::test]
+    async fn throttle_events_drop_action_drops_excess_event() {
+        let clock = clock::FakeRelativeClock::default();
+        let config = ThrottleConfig {
+            threshold: 1,
+            limit_type: ThrottleLimitType::Event,
+            exceeded_action: ThrottleExceededAction::Drop,
+            window_secs: Duration::from_secs(5),
+            ..Default::default()
+        };
+
+        let throttle = Throttle::new(&config, &TransformContext::default(), clock.clone())
+            .map(Transform::event_task)
+            .unwrap();
+
+        let throttle = throttle.into_task();
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(10);
+        let mut out_stream = throttle.transform_events(Box::pin(rx));
+
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+
+        tx.send(LogEvent::default().into()).await.unwrap();
+        match out_stream.next().await {
+            Some(_event) => {}
+            _ => panic!("Unexpectedly received None in output stream"),
+        }
+
+        tx.send(LogEvent::default().into()).await.unwrap();
+        assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+    }
+
+    #[tokio::test]
     async fn throttle_bytes() {
         let clock = clock::FakeRelativeClock::default();
         let event = log_event_with_message("byte-sized-event");
@@ -330,6 +372,90 @@ window_secs = 5
         tx.send(event).await.unwrap();
 
         assert_eq!(Poll::Pending, futures::poll!(out_stream.next()));
+    }
+
+    #[tokio::test]
+    async fn throttle_events_blocks_until_capacity_is_available() {
+        let config = ThrottleConfig {
+            threshold: 1,
+            limit_type: ThrottleLimitType::Event,
+            exceeded_action: ThrottleExceededAction::Block,
+            window_secs: Duration::from_millis(25),
+            ..Default::default()
+        };
+
+        let throttle = Throttle::new(&config, &TransformContext::default(), clock::MonotonicClock)
+            .map(Transform::event_task)
+            .unwrap();
+
+        let throttle = throttle.into_task();
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(10);
+        let mut out_stream = throttle.transform_events(Box::pin(rx));
+
+        tx.send(LogEvent::default().into()).await.unwrap();
+        tx.send(LogEvent::default().into()).await.unwrap();
+
+        assert!(out_stream.next().await.is_some());
+        assert!(out_stream.next().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn throttle_bytes_blocks_until_capacity_is_available() {
+        let event = log_event_with_message("byte-sized-event");
+        let threshold = u32::try_from(event.estimated_json_encoded_size_of().get()).unwrap();
+        let config = ThrottleConfig {
+            threshold,
+            limit_type: ThrottleLimitType::Byte,
+            exceeded_action: ThrottleExceededAction::Block,
+            window_secs: Duration::from_millis(25),
+            ..Default::default()
+        };
+
+        let throttle = Throttle::new(&config, &TransformContext::default(), clock::MonotonicClock)
+            .map(Transform::event_task)
+            .unwrap();
+
+        let throttle = throttle.into_task();
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(10);
+        let mut out_stream = throttle.transform_events(Box::pin(rx));
+
+        tx.send(event.clone()).await.unwrap();
+        tx.send(event).await.unwrap();
+
+        assert!(out_stream.next().await.is_some());
+        assert!(out_stream.next().await.is_some());
+    }
+
+    #[tokio::test]
+    async fn throttle_bytes_block_drops_oversized_event() {
+        let event = log_event_with_message(&"x".repeat(128));
+        let event_size = u32::try_from(event.estimated_json_encoded_size_of().get()).unwrap();
+        let config = ThrottleConfig {
+            threshold: event_size - 1,
+            limit_type: ThrottleLimitType::Byte,
+            exceeded_action: ThrottleExceededAction::Block,
+            window_secs: Duration::from_millis(25),
+            ..Default::default()
+        };
+
+        let throttle = Throttle::new(&config, &TransformContext::default(), clock::MonotonicClock)
+            .map(Transform::event_task)
+            .unwrap();
+
+        let throttle = throttle.into_task();
+
+        let (mut tx, rx) = futures::channel::mpsc::channel(10);
+        let mut out_stream = throttle.transform_events(Box::pin(rx));
+
+        tx.send(event).await.unwrap();
+
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), out_stream.next())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -566,6 +692,7 @@ key_field = "{{ bucket }}"
             let config = ThrottleConfig {
                 threshold: 1,
                 limit_type: ThrottleLimitType::Event,
+                exceeded_action: ThrottleExceededAction::Drop,
                 window_secs: Duration::from_secs_f64(1.0),
                 key_field: None,
                 exclude: None,
