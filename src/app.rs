@@ -317,6 +317,7 @@ impl StartedApplication {
 
         let mut signal_handler = signals.handler;
         let mut signal_rx = signals.receiver;
+        let mut health_timer = tokio::time::interval(tokio::time::Duration::from_secs(3600 * 12));
 
         let signal = loop {
             let has_sources = !topology_controller.lock().await.topology.config.is_empty();
@@ -337,6 +338,9 @@ impl StartedApplication {
                     info!("All sources have finished.");
                     break SignalTo::Shutdown(None)
                 } ,
+                _ = health_timer.tick() => {
+                    info!("I am still running");
+                },
                 else => unreachable!("Signal streams never end"),
             }
         };

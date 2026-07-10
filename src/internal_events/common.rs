@@ -47,6 +47,12 @@ impl InternalEvent for EndpointBytesSent<'_> {
             protocol = %self.protocol,
             endpoint = %self.endpoint
         );
+        debug!(
+            message = "Sent data to down layers from current sink.",
+            byte_size = %self.byte_size,
+            protocol = %self.protocol,
+            endpoint = %self.endpoint
+        );
         counter!(
             CounterName::ComponentSentBytesTotal,
             "protocol" => self.protocol.to_string(),

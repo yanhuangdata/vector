@@ -19,6 +19,7 @@ fn main() -> Result<()> {
     let descriptor_path = out_dir.join("opentelemetry-proto.desc");
 
     tonic_build::configure()
+        .protoc_arg("--experimental_allow_proto3_optional")
         .build_client(true)
         .build_server(true)
         .file_descriptor_set_path(&descriptor_path)
