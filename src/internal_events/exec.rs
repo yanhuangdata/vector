@@ -41,6 +41,31 @@ impl InternalEvent for ExecEventsReceived<'_> {
 }
 
 #[derive(Debug, NamedInternalEvent)]
+pub struct CronJobError<'a> {
+    pub schedule: &'a str,
+    pub error: cron::error::Error,
+}
+impl InternalEvent for CronJobError<'_> {
+    fn emit(self) {
+        error!(
+            message = "Cron job error.",
+            schedule = %self.schedule,
+            error = ?self.error,
+            error_type = error_type::CONFIGURATION_FAILED,
+            stage = error_stage::RECEIVING,
+            internal_log_rate_limit = true,
+        );
+        counter!(
+            CounterName::ComponentErrorsTotal,
+            "schedule" => self.schedule.to_owned(),
+            "error_type" => error_type::CONFIGURATION_FAILED,
+            "stage" => error_stage::RECEIVING,
+        )
+        .increment(1);
+    }
+}
+
+#[derive(Debug, NamedInternalEvent)]
 pub struct ExecFailedError<'a> {
     pub command: &'a str,
     pub error: std::io::Error,

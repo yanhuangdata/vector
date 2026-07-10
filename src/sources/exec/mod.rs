@@ -1,6 +1,8 @@
 use std::{collections::HashMap, io::Error, path::PathBuf, process::ExitStatus};
 
-use chrono::Utc;
+use std::str::FromStr;
+use cron::Schedule;
+use chrono::{FixedOffset, Utc, Local};
 use futures::StreamExt;
 use smallvec::SmallVec;
 use snafu::Snafu;
@@ -35,6 +37,7 @@ use crate::{
     serde::default_decoding,
     shutdown::ShutdownSignal,
 };
+use crate::internal_events::CronJobError;
 
 #[cfg(test)]
 mod tests;
@@ -52,6 +55,9 @@ pub struct ExecConfig {
 
     #[configurable(derived)]
     pub streaming: Option<StreamingConfig>,
+
+    #[configurable(derived)]
+    pub cron_job: Option<CronJobConfig>,
 
     /// The command to run, plus any arguments required.
     #[configurable(metadata(docs::examples = "echo", docs::examples = "Hello World!"))]
@@ -102,6 +108,9 @@ pub enum Mode {
 
     /// The command is run until it exits, potentially being restarted.
     Streaming,
+
+    /// The command is run on a cron schedule.
+    CronJob,
 }
 
 /// Configuration options for scheduled commands.
@@ -131,6 +140,20 @@ pub struct StreamingConfig {
     respawn_interval_secs: u64,
 }
 
+/// Configuration options for cronjob commands
+#[configurable_component]
+#[derive(Clone, Debug)]
+#[serde(deny_unknown_fields)]
+pub struct CronJobConfig {
+    /// The timezone of the cron expression
+    #[serde(default = "default_timezone")]
+    timezone: String,
+    /// Cron expression
+    #[serde(default)]
+    #[configurable(description = "The cron expression for scheduling")]
+    schedule : String,
+}
+
 #[derive(Debug, PartialEq, Eq, Snafu)]
 pub enum ExecConfigError {
     #[snafu(display("A non-empty list for command must be provided"))]
@@ -147,6 +170,7 @@ impl Default for ExecConfig {
                 exec_interval_secs: default_exec_interval_secs(),
             }),
             streaming: None,
+            cron_job: None,
             command: vec!["echo".to_owned(), "Hello World!".to_owned()],
             environment: None,
             clear_environment: default_clear_environment(),
@@ -175,6 +199,13 @@ const fn default_respawn_interval_secs() -> u64 {
 
 const fn default_respawn_on_exit() -> bool {
     true
+}
+
+fn default_timezone() -> String {
+    // get default second offset to utc locally
+    let local_offset_seconds = Local::now().offset().local_minus_utc();
+    // default timezone use east +8 hours
+    FixedOffset::east_opt(local_offset_seconds).unwrap().to_string()
 }
 
 const fn default_clear_environment() -> bool {
@@ -240,6 +271,24 @@ impl ExecConfig {
             Some(config) => config.respawn_interval_secs,
         }
     }
+
+    fn timezone_or_default(&self) -> FixedOffset {
+        match &self.cron_job {
+            None => self.str_to_fixed_offset_or_default(&default_timezone()),
+            Some(config) => {
+                let input = &config.timezone;
+
+                self.str_to_fixed_offset_or_default(input)
+            },
+        }
+    }
+    fn str_to_fixed_offset_or_default(&self, str: &str) -> FixedOffset {
+        // get default second offset to utc locally
+        let local_offset_seconds = Local::now().offset().local_minus_utc();
+        // parse str to fixedOffset(timezone) or use default
+        str.parse::<FixedOffset>().unwrap_or_else(|_| FixedOffset::east_opt(local_offset_seconds).unwrap())
+    }
+
 }
 
 #[async_trait::async_trait]
@@ -279,6 +328,22 @@ impl SourceConfig for ExecConfig {
                     hostname,
                     respawn_on_exit,
                     respawn_interval_secs,
+                    decoder,
+                    cx.shutdown,
+                    cx.out,
+                    log_namespace,
+                )))
+            }
+
+            Mode::CronJob => {
+                let timezone = self.timezone_or_default();
+                let config = self.cron_job.clone().expect("CronJob Config is not set.");
+
+                Ok(Box::pin(run_cronjob(
+                    self.clone(),
+                    hostname,
+                    config.schedule,
+                    timezone,
                     decoder,
                     cx.shutdown,
                     cx.out,
@@ -449,6 +514,69 @@ async fn run_streaming(
         }
     }
 
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_cronjob(
+    config: ExecConfig,
+    hostname: Option<String>,
+    cron_exp: String,
+    timezone: FixedOffset,
+    decoder: Decoder,
+    mut shutdown: ShutdownSignal,
+    out: SourceSender,
+    log_namespace: LogNamespace,
+) -> Result<(), ()> {
+    debug!("Starting cronjob exec runs.");
+
+    let schedule = Schedule::from_str(cron_exp.as_str()).map_err(|cron_exp_err | {
+        emit!(CronJobError {
+            schedule: cron_exp.as_str(),
+            error: cron_exp_err,
+        });
+    })?;
+
+    tokio::spawn(async move {
+        // get last task to check is last task finished
+        let last_task: Option<tokio::task::JoinHandle<Result<(), ()>>> = None;
+
+        for datetime in schedule.upcoming(timezone) {
+            // Calculate the time until the next execution point
+            let now = Utc::now().with_timezone(&timezone);
+            let delay_duration = (datetime - now).to_std().unwrap_or(Duration::from_secs(0));
+
+            // Wait for next execute time or exit signal
+            tokio::select! {
+                _ = sleep(delay_duration) => {
+                    // check if the previous task has finished
+                    if let Some(task) = &last_task
+                        && !task.is_finished()
+                    {
+                        debug!("Previous task is still running, skipping this execution.");
+                        continue;
+                    }
+                    // wait to next job execute time, run command
+                    if let Err(command_error) = run_command(
+                        config.clone(),
+                        hostname.clone(),
+                        decoder.clone(),
+                        shutdown.clone(),
+                        out.clone(),
+                        log_namespace,
+                    ).await {
+                        emit!(ExecFailedError {
+                            command: config.command_line().as_str(),
+                            error: command_error,
+                        });
+                    }
+                }
+                // received shutdown signal
+                _ = &mut shutdown => break
+            }
+        }
+    }).await.unwrap();
+    debug!("Finished cronjob exec runs.");
     Ok(())
 }
 
