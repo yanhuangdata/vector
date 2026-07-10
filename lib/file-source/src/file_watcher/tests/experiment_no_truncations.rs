@@ -22,6 +22,8 @@ async fn experiment_no_truncations(actions: Vec<FileWatcherAction>) {
         None,
         100_000,
         Bytes::from("\n"),
+        false,
+        None,
     )
     .await
     .expect("must be able to create");

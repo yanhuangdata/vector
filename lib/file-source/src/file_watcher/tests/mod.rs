@@ -186,14 +186,18 @@ fn watcher_for_timing() -> FileWatcher {
         devno: 0,
         inode: 0,
         is_dead: false,
+        is_sleep: false,
         reached_eof: false,
         last_read_attempt: now,
         last_read_success: now,
         read_retry_delay: EOF_READ_BACKOFF_MIN,
+        data_ready_time: now,
         last_seen: now,
         max_line_bytes: 1024,
         line_delimiter: Bytes::from_static(b"\n"),
+        read_eof_linger_line: false,
         buf: BytesMut::new(),
+        trigger_wait_sec: None,
     }
 }
 
