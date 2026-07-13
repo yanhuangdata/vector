@@ -1,0 +1,87 @@
+name: Yanhuang Build
+
+# Manually-triggered build that produces clean-versioned .tar.gz archives
+# (no `.custom.<sha>` suffix, no publishing) for the three targets we ship:
+#   - x86_64-unknown-linux-gnu   (native on ubuntu-24.04)
+#   - aarch64-unknown-linux-gnu  (native on ubuntu-24.04-arm)
+#   - aarch64-apple-darwin       (native on macos-14)
+# Version comes from VECTOR_VERSION below, passed straight to make so the
+# vdev channel logic (which appends .custom.<sha>) is never invoked.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string for archive names"
+        type: string
+        default: "0.56.0-yanhuang.1"
+
+env:
+  VERBOSE: true
+  CI: true
+  DISABLE_MOLD: true
+  CONTAINER_TOOL: docker
+  DEBIAN_FRONTEND: noninteractive
+
+jobs:
+  build-linux-gnu:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    env:
+      VECTOR_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout Vector
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup
+        with:
+          rust: true
+          protoc: true
+      - name: Build archive
+        run: make NATIVE=true package-${{ matrix.target }} VERSION="${{ inputs.version }}"
+      - name: Upload archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vector-${{ inputs.version }}-${{ matrix.target }}
+          path: target/artifacts/vector-${{ inputs.version }}-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  build-apple-darwin:
+    name: Build aarch64-apple-darwin
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      VECTOR_VERSION: ${{ inputs.version }}
+    steps:
+      - name: Checkout Vector
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: ./.github/actions/setup
+        with:
+          rust: true
+          protoc: true
+      - name: Build archive
+        env:
+          TARGET: aarch64-apple-darwin
+          NATIVE_BUILD: "true"
+          FEATURES: target-aarch64-apple-darwin
+        run: |
+          export PATH="$HOME/.cargo/bin:$PATH"
+          make package VERSION="${{ inputs.version }}"
+      - name: Upload archive
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: vector-${{ inputs.version }}-aarch64-apple-darwin
+          path: target/artifacts/vector-${{ inputs.version }}-aarch64-apple-darwin.tar.gz
+          if-no-files-found: error
+

@@ -138,6 +138,12 @@ cross-enable: cargo-install-cross
 CARGO_HANDLES_FRESHNESS:
 	${EMPTY}
 
+# cross-rs only publishes linux/amd64 toolchain images, so the cross-env image
+# must be built for that platform. On an amd64 host this is a no-op; on an arm64
+# host (e.g. Apple Silicon) it forces emulation instead of failing with
+# "no match for platform in manifest". Override if cross-rs ever ships arm64.
+CROSS_PLATFORM ?= linux/amd64
+
 # Pinned digests for ghcr.io/cross-rs/<target>:edge.
 # Refresh with: crane digest ghcr.io/cross-rs/<target>:edge
 CROSS_DIGEST_x86_64-unknown-linux-gnu       := sha256:13f7a68e55cb05a19e840bce65834fc785dc069e0c2218d12b8fdb8f8a1519d5
@@ -156,6 +162,7 @@ cross-image-%: export TRIPLE =$($(strip @):cross-image-%=%)
 cross-image-%:
 	@if [ -n "$(CROSS_DIGEST_$*)" ]; then \
 		$(CONTAINER_TOOL) build \
+			--platform $(CROSS_PLATFORM) \
 			--build-arg TARGET=$* \
 			--build-arg CROSS_DIGEST=$(CROSS_DIGEST_$*) \
 			--file scripts/cross/Dockerfile \
